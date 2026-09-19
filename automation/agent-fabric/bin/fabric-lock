@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+import argparse,json,sys
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).parents[1]/'lib'))
+from lock import LockStore
+parser=argparse.ArgumentParser(); parser.add_argument('action',choices=('acquire','release','check','inspect','recover')); parser.add_argument('--state-root',required=True); args=parser.parse_args()
+try: request=json.load(sys.stdin)
+except json.JSONDecodeError: print(json.dumps({'code':'INVALID_REQUEST'})); raise SystemExit(2)
+store=LockStore(args.state_root)
+if args.action=='acquire': response=store.acquire(request)
+elif args.action=='release': response=store.release(request.get('operation_id'),request.get('capability',''))
+elif args.action=='check': response=store.check(request.get('area_id'),request.get('operation_id'),request.get('epoch'))
+elif args.action=='inspect': response=store.inspect(request.get('area_id'))
+else: response=store.recover(request.get('area_id'),request.get('evidence'))
+print(json.dumps(response)); raise SystemExit(0 if response['code'] in ('ACQUIRED','RELEASED','RECOVERY_QUARANTINED','INSPECTION_REQUIRED') else 1)

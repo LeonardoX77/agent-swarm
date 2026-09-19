@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"Fabric plan","type":"object","additionalProperties":false,"required":["schema_version","macbook","mac_mini","workspace_areas","skills"],"properties":{"schema_version":{"const":1},"macbook":{"type":"object"},"mac_mini":{"type":"object"},"workspace_areas":{"type":"array"},"skills":{"type":"object"}}}

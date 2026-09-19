@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+import argparse, json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parents[1] / 'lib'))
+from records import write_event
+from validate_plan import validate_plan
+parser=argparse.ArgumentParser(); parser.add_argument('--config'); parser.add_argument('--record'); parser.add_argument('--apply',action='store_true'); args=parser.parse_args()
+if args.apply: print('APPLY_NOT_IMPLEMENTED'); raise SystemExit(2)
+if not args.config: print('CONFIG_REQUIRED'); raise SystemExit(2)
+try: plan=json.loads(Path(args.config).read_text())
+except (OSError,json.JSONDecodeError): print('INVALID_CONFIG'); raise SystemExit(2)
+diagnostics=validate_plan(plan)
+if diagnostics: print(json.dumps({'diagnostics':diagnostics})); raise SystemExit(1)
+if args.record: write_event(args.record,{'event_type':'preflight','host_role':'operator','outcome':'pass','diagnostic_codes':[],'details':{'mode':'dry-run'}})
+print('mode: dry-run\npreflight: valid')
