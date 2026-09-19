@@ -1,13 +1,39 @@
 #!/usr/bin/env python3
-import argparse,hashlib,json,sys
+import argparse
+import hashlib
+import json
+import sys
 from pathlib import Path
-sys.path.insert(0,str(Path(__file__).parents[1]/'lib'))
+
+sys.path.insert(0, str(Path(__file__).parents[1] / 'lib'))
 from measurements import build_measurement
-parser=argparse.ArgumentParser(); parser.add_argument('--record'); parser.add_argument('--host-role',choices=('macbook','mac-mini')); parser.add_argument('--network-label'); parser.add_argument('--apply',action='store_true'); args=parser.parse_args()
-if args.apply: print('APPLY_NOT_IMPLEMENTED'); raise SystemExit(2)
-if not all((args.record,args.host_role,args.network_label)): print('RECORD_HOST_ROLE_AND_NETWORK_LABEL_REQUIRED'); raise SystemExit(2)
-path=Path(args.record)
-if str(path).startswith(('/Users/leo/projects','/Volumes/','/Users/')): print('UNSAFE_RECORD_DESTINATION'); raise SystemExit(2)
-path.parent.mkdir(parents=True,exist_ok=True)
-record=build_measurement('sha256:'+hashlib.sha256(args.network_label.encode()).hexdigest(),args.host_role,args.network_label)
-path.write_text(json.dumps(record,sort_keys=True),encoding='utf-8'); print('mode: non-configuring-measurement')
+from records import local_destination
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--record')
+parser.add_argument('--host-role', choices=('macbook', 'mac-mini'))
+parser.add_argument('--network-label')
+parser.add_argument('--apply', action='store_true')
+args = parser.parse_args()
+if args.apply:
+    print('APPLY_NOT_IMPLEMENTED')
+    raise SystemExit(2)
+if not all((args.record, args.host_role, args.network_label)):
+    print('RECORD_HOST_ROLE_AND_NETWORK_LABEL_REQUIRED')
+    raise SystemExit(2)
+if not local_destination(args.record):
+    print('UNSAFE_RECORD_DESTINATION')
+    raise SystemExit(2)
+try:
+    path = Path(args.record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = build_measurement(
+        'sha256:' + hashlib.sha256(args.network_label.encode()).hexdigest(),
+        args.host_role,
+        args.network_label,
+    )
+    path.write_text(json.dumps(record, sort_keys=True), encoding='utf-8')
+except (OSError, ValueError):
+    print('UNSAFE_RECORD_DESTINATION')
+    raise SystemExit(2)
+print('mode: non-configuring-measurement')

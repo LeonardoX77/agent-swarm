@@ -11,5 +11,9 @@ try: plan=json.loads(Path(args.config).read_text())
 except (OSError,json.JSONDecodeError): print('INVALID_CONFIG'); raise SystemExit(2)
 diagnostics=validate_plan(plan)
 if diagnostics: print(json.dumps({'diagnostics':diagnostics})); raise SystemExit(1)
-if args.record: write_event(args.record,{'event_type':'preflight','host_role':'operator','outcome':'pass','diagnostic_codes':[],'details':{'mode':'dry-run'}})
+if args.record:
+ try:
+  write_event(args.record,{'event_type':'preflight','host_role':'operator','outcome':'pass','diagnostic_codes':[],'details':{'mode':'dry-run'}})
+ except (OSError, ValueError):
+  print('UNSAFE_RECORD_DESTINATION'); raise SystemExit(2)
 print('mode: dry-run\npreflight: valid')

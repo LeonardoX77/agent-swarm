@@ -10,7 +10,7 @@ No se crea identidad, credencial, montaje ni automontaje.
 Alias SSH existente, identidad de ejecución suministrada como parámetro y destino futuro fuera de HOME y estado protegido.
 
 ## Preflight seguro
-Compruebe SSH batch mediante `ssh -o BatchMode=yes -- agent-fabric-macbook`; una falla detiene el trabajo. El destino propuesto es `/Volumes/agent-workspaces`.
+Compruebe SSH batch mediante `ssh -o BatchMode=yes -- agent-fabric-macbook`; una falla detiene el trabajo. Registre con `fabric-activity` la actividad local saneada del agente y repositorio; el registro no autoriza ni bloquea escritores. El destino propuesto es `/Volumes/agent-workspaces`.
 
 ## Evidencia que conservar
 Registre localmente estado previo de red, montaje y cuenta sin secretos ni stderr.

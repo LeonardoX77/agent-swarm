@@ -1,25 +1,25 @@
-# Orquestación y bloqueo
+# Orquestación y actividad
 
 ## Propósito
-Permitir trabajo seleccionado desde ambos hosts con MacBook como orquestador principal y autoridad única de bloqueo.
+Permitir trabajo seleccionado desde ambos hosts con MacBook como orquestador principal y con actividad local visible para cada repositorio.
 
 ## No objetivos
-No se habilita shell remoto general ni se configura SSH.
+No se habilita shell remoto general ni se configura SSH. `fabric-activity` no autoriza, bloquea ni serializa escritores concurrentes.
 
 ## Entradas
-Área declarada, escritor previsto, ID de operación y alias SSH no secreto.
+Área declarada, agente, repositorio, host e ID de operación; el alias SSH no contiene secretos.
 
 ## Preflight seguro
-Valide el plan, alcance MacBook con `ssh -o BatchMode=yes -- agent-fabric-macbook`, y adquiera el bloqueo antes de escribir. La capacidad viaja por stdin, nunca por argumentos.
+Valide el plan y, cuando corresponda, alcance MacBook con `ssh -o BatchMode=yes -- agent-fabric-macbook`. Antes o después de trabajar, use `fabric-activity` para registrar actividad local saneada. El registro nunca determina si un escritor puede continuar.
 
 ## Evidencia que conservar
-Registre localmente resultado terminal `succeeded`, `failed` o `cancelled`, sin credenciales ni contenido del espacio de trabajo.
+Conserve localmente la última actividad saneada de agente, repositorio y host, junto con el resultado terminal `succeeded`, `failed` o `cancelled`; no guarde credenciales ni contenido del espacio de trabajo.
 
 ## Acciones aplazadas
-DEFERRED: cuenta SSH, comando forzado, permisos y provisión de raíz de bloqueo.
+DEFERRED: cuenta SSH, comando forzado y permisos requieren autorización futura.
 
 ## Condiciones de detención por falla
-Contención, autoridad inalcanzable, metadatos faltantes o pérdida de época detienen la escritura; no hay espera automática.
+Detenga el preflight si faltan metadatos requeridos, el plan falla o el alcance SSH autorizado no está disponible. La actividad concurrente no detiene ni concede permiso a escritores.
 
 ## Pasos futuros autorizados
-Para un bloqueo obsoleto, inspeccione estado terminal o escritor detenido, conectividad/aislamiento, ausencia de escritura y área inactiva; solo entonces confirme recuperación manual. Nunca recupere automáticamente.
+Revise el último registro local saneado para observabilidad y coordinación humana. No use SSH ni el registro de actividad para imponer exclusión entre escritores.

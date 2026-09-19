@@ -11,4 +11,11 @@ class RunbookSafetyTests(unittest.TestCase):
   for text in ('/Users/leo/projects','Git','habilidades locales','BatchMode=yes','no se crea','no se debe eliminar'):
    self.assertIn(text.lower(),content.lower())
   self.assertNotIn('--apply',content)
+ def test_documentation_uses_observability_without_lock_enforcement(self):
+  paths=tuple(DOCS.glob('*.md'))+(Path(__file__).parents[3]/'docs'/'odd'/'agent-fabric-foundation.md',)
+  content='\n'.join(path.read_text() for path in paths).lower()
+  for text in ('fabric-activity','observabilidad','no autoriza','no bloquea','sanead'):
+   self.assertIn(text,content)
+  for text in ('fabric-lock','lock','bloqueo','contención','contention','fencing','ssh-based locking'):
+   self.assertNotIn(text,content)
 if __name__=='__main__': unittest.main()
