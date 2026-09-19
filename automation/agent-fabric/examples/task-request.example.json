@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "workspace": "mac-agent-fabric",
+  "relative_path": ".",
+  "prompt": "Read only: report the current working directory and the repository name. Do not modify files, configuration, or network state.",
+  "initiator": "macbook",
+  "timeout_seconds": 120
+}

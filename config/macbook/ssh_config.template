@@ -1,0 +1,13 @@
+# Copy into leo's local ~/.ssh/config and replace only the placeholders.
+# HostName: choose the Mac mini's reachable LAN address or its Tailscale name/IP.
+# Do not use an invented hostname.
+Host agent-fabric-mac-mini
+    HostName <MAC_MINI_LAN_OR_TAILSCALE_ENDPOINT>
+    User jarvis
+    IdentityFile ~/.ssh/agent-fabric-macbook-to-mac-mini
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+    ForwardAgent no
+    ForwardX11 no
+    RequestTTY no

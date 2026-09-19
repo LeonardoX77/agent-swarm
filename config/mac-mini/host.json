@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "role": "mac-mini",
+  "expected_user": "jarvis",
+  "max_timeout_seconds": 900,
+  "workspace_roots": {
+    "mac-agent-fabric": "/Volumes/agent-projects/leo/mac-agent-fabric"
+  },
+  "ssh_aliases": {
+    "macbook": "agent-fabric-macbook",
+    "mac-mini": "agent-fabric-mac-mini"
+  },
+  "activity_record": "/Users/jarvis/.local/state/agent-fabric/activity.jsonl"
+}

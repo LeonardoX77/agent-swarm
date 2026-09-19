@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "role": "macbook",
+  "expected_user": "leo",
+  "max_timeout_seconds": 900,
+  "workspace_roots": {
+    "mac-agent-fabric": "/Users/leo/projects/leo/mac-agent-fabric"
+  },
+  "ssh_aliases": {
+    "macbook": "agent-fabric-macbook",
+    "mac-mini": "agent-fabric-mac-mini"
+  },
+  "activity_record": "/Users/leo/.local/state/agent-fabric/activity.jsonl"
+}
