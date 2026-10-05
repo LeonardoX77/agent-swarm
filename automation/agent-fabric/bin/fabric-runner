@@ -40,6 +40,18 @@ def destination(request, config):
     return resolved
 
 
+def runtime_argv(request):
+    runtime = request['runtime']
+    prompt = request['prompt']
+    if runtime == 'pi':
+        return ['pi', '-p', '--approve', '--name', 'fabric-' + request['request_id'], '--', prompt]
+    if runtime == 'opencode':
+        return ['opencode', 'run', '--', prompt]
+    if runtime == 'claude':
+        return ['claude', '-p', '--permission-prompts', 'none', '--', prompt]
+    raise ValueError('INVALID_TASK_REQUEST')
+
+
 def _record(config, request, status, duration_seconds, diagnostic_code):
     record = config.get('activity_record')
     if not record:
@@ -60,12 +72,13 @@ def run_task(request, config):
         raise ValueError('UNEXPECTED_USER')
     if request['timeout_seconds'] > config['max_timeout_seconds']:
         raise ValueError('TIMEOUT_EXCEEDED')
+    if request['runtime'] not in config['allowed_runtimes']:
+        raise ValueError('RUNTIME_NOT_ALLOWED')
     cwd = destination(request, config)
     started_at = time.monotonic()
     record_failed = _record(config, request, 'started', 0, 'STARTED')
-    name = 'fabric-' + request['request_id']
     child_env = environment.child_environment(os.environ)
-    completed = process.run(['pi', '-p', '--approve', '--name', name, '--', request['prompt']], cwd=str(cwd), timeout=request['timeout_seconds'], env=child_env)
+    completed = process.run(runtime_argv(request), cwd=str(cwd), timeout=request['timeout_seconds'], env=child_env)
     outcome = process.result(completed)
     duration_seconds = time.monotonic() - started_at
     record_failed = _record(config, request, outcome['status'], duration_seconds, outcome.get('diagnostic_code', 'NONE')) or record_failed

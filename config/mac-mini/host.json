@@ -10,5 +10,6 @@
     "macbook": "agent-fabric-macbook",
     "mac-mini": "agent-fabric-mac-mini"
   },
+  "allowed_runtimes": ["pi", "opencode", "claude"],
   "activity_record": "/Users/jarvis/.local/state/agent-fabric/activity.jsonl"
 }

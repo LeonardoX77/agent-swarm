@@ -12,6 +12,7 @@ VALID = {
     'workspace': 'mac-agent-fabric',
     'relative_path': '.',
     'prompt': 'Inspect focused findings.',
+    'runtime': 'pi',
     'initiator': 'macbook',
     'timeout_seconds': 30,
 }
@@ -21,8 +22,8 @@ class RequestTests(unittest.TestCase):
     def test_accepts_exact_v1_request(self):
         self.assertEqual(validate_request(VALID), VALID)
 
-    def test_rejects_unknown_fields_secrets_and_unsafe_paths(self):
-        for change in ({'extra': True}, {'token': 'secret'}, {'relative_path': '../escape'}, {'relative_path': '/absolute'}):
+    def test_rejects_unknown_fields_secrets_unsafe_paths_and_unknown_runtimes(self):
+        for change in ({'extra': True}, {'token': 'secret'}, {'relative_path': '../escape'}, {'relative_path': '/absolute'}, {'runtime': 'unknown'}):
             with self.assertRaises(ValueError):
                 validate_request({**VALID, **change})
 

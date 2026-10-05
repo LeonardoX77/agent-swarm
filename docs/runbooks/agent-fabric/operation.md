@@ -1,6 +1,6 @@
 # Operación bidireccional de Agent Fabric v1
 
-Usá este runbook para despachar una tarea acotada al Pi + Gentle Pi **local** del otro host. La solicitud viaja por stdin; no pone prompts, rutas ni JSON en argumentos SSH.
+Usá este runbook para despachar una tarea acotada a Pi + Gentle Pi, OpenCode o Claude Code **local** del otro host. Agent Fabric es infraestructura de transporte y ejecución restringida: no es un agente/modelo y no selecciona runtime automáticamente. La solicitud viaja por stdin; no pone prompts, rutas ni JSON en argumentos SSH.
 
 ## Camino rápido
 
@@ -8,7 +8,7 @@ Usá este runbook para despachar una tarea acotada al Pi + Gentle Pi **local** d
 2. Creá y revisá una solicitud JSON con un prompt explícitamente acotado.
 3. Despachala al alias del otro host y leé sólo el resultado JSON saneado.
 
-> **Gate humano:** un despacho ejecuta `pi -p --approve` bajo la cuenta del destino. No lo inicies sin revisar el prompt, el workspace y el riesgo de concurrencia.
+> **Gate humano:** cada solicitud declara `runtime: pi`, `opencode` o `claude`; el destino lo permite o rechaza con su `allowed_runtimes` local. No inicies un despacho sin revisar runtime, prompt, workspace y riesgo de concurrencia. El runner no acepta flags ni shell controlados por la solicitud.
 
 ## Crear una solicitud
 
@@ -20,13 +20,13 @@ cp automation/agent-fabric/examples/task-request.example.json \
   "$HOME/.local/share/agent-fabric/requests/macbook-to-mini.json"
 ```
 
-La solicitud debe contener exactamente `version`, `request_id`, `workspace`, `relative_path`, `prompt`, `initiator` y `timeout_seconds`. No agregues claves, rutas absolutas, credenciales ni contenido de Keychain. El ejemplo es inocuo: pide un informe de sólo lectura.
+La solicitud debe contener exactamente `version`, `request_id`, `workspace`, `relative_path`, `prompt`, `runtime`, `initiator` y `timeout_seconds`. `runtime` es exactamente `pi`, `opencode` o `claude`; el host destino lo valida contra su propio `allowed_runtimes`. No agregues claves, rutas absolutas, flags, credenciales ni contenido de Keychain. El ejemplo es inocuo: pide un informe de sólo lectura.
 
 ## Despacho en ambos sentidos
 
 ### MacBook → Mac mini
 
-En la MacBook, como `leo`, revisá que el archivo tenga `"initiator": "macbook"`. El siguiente comando es un **despacho activo**: puede ejecutar la tarea remota.
+En la MacBook, como `leo`, revisá que el archivo tenga `"initiator": "macbook"` y un `runtime` permitido por la Mac mini. El siguiente comando es un **despacho activo**: puede ejecutar la tarea remota.
 
 ```sh
 python3 automation/agent-fabric/bin/fabric-dispatch \
@@ -39,11 +39,11 @@ El dispatcher usa el alias local `agent-fabric-mac-mini`, que se autentica como 
 
 ### Mac mini → MacBook
 
-En la Mac mini, como `jarvis`, creá la solicitud local con un UUID nuevo. Este comando sólo escribe el archivo de solicitud; revisalo antes de despacharlo.
+En la Mac mini, como `jarvis`, creá la solicitud local con un UUID nuevo y un runtime permitido por la MacBook. Este comando sólo escribe el archivo de solicitud; revisalo antes de despacharlo.
 
 ```sh
 cat > "$HOME/.local/share/agent-fabric/requests/mac-mini-to-macbook.json" <<'JSON'
-{"version":1,"request_id":"b3b0a9d3-c3e5-4d5f-8b90-8fa6152e0e89","workspace":"mac-agent-fabric","relative_path":".","prompt":"Read only: report the current working directory and the repository name. Do not modify files, configuration, or network state.","initiator":"mac-mini","timeout_seconds":120}
+{"version":1,"request_id":"b3b0a9d3-c3e5-4d5f-8b90-8fa6152e0e89","workspace":"mac-agent-fabric","relative_path":".","prompt":"Read only: report the current working directory and the repository name. Do not modify files, configuration, or network state.","runtime":"pi","initiator":"mac-mini","timeout_seconds":120}
 JSON
 ```
 
@@ -66,7 +66,19 @@ El identificador lógico es el mismo en ambos hosts, pero el runner resuelve una
 |---|---|---|
 | `mac-agent-fabric` | `/Users/leo/projects/leo/mac-agent-fabric` | `/Volumes/agent-projects/leo/mac-agent-fabric` |
 
-`relative_path` es `.` para la raíz o una ruta relativa sin `..`, symlinks ni prefijo `/`. El runner rechaza rutas ambiguas, escapes y workspaces ausentes antes de iniciar Pi.
+`relative_path` es `.` para la raíz o una ruta relativa sin `..`, symlinks ni prefijo `/`. El runner rechaza rutas ambiguas, escapes, workspaces ausentes, runtimes desconocidos y runtimes no autorizados antes de iniciar un CLI.
+
+## Runtimes y ejemplos seguros
+
+El destino construye el comando desde una tabla cerrada; la solicitud sólo elige `runtime` y aporta el prompt como argumento, sin shell ni flags controlados por quien solicita.
+
+| `runtime` | Comando exacto en el destino | Ejemplo de prompt inocuo |
+|---|---|---|
+| `pi` | `pi -p --approve --name fabric-<request_id> -- <prompt>` | `Read only: report the repository name. Do not modify files.` |
+| `opencode` | `opencode run -- <prompt>` | `Read only: list top-level files. Do not modify files.` |
+| `claude` | `claude -p --permission-prompts none -- <prompt>` | `Read only: report the current working directory. Do not modify files.` |
+
+Pi conserva la semántica actual de `--approve`; OpenCode no se inicia con `--auto`. En Claude Code, `--permission-prompts none` falla cerrado si una operación necesitaría un prompt sin respuesta; las políticas locales del host siguen gobernando. La identidad, configuración, credenciales, sesiones y permisos de los tres CLI permanecen locales al destino.
 
 ## Resultado acotado
 
@@ -95,7 +107,8 @@ No reintentes automáticamente. Ante `failed`, guardá el JSON saneado, verific�
 | `INVALID_INPUT`, `TIMEOUT_EXCEEDED` o path rechazado | Corregí el JSON local; no intentes transportar rutas absolutas ni ampliar el timeout sin revisar la política local. |
 | Alias, red o clave fallan | Ejecutá la lista de validación en el host iniciador. No abras un shell SSH ni cambies restricciones para diagnosticar. |
 | `WORKSPACE_UNAVAILABLE` | Verificá el montaje SMB y el mapeo local; no crees directorios desde el runner. |
-| Pi no está autenticado localmente | Detené el despacho. La persona inicia sesión localmente en el host destino; nunca se envían credenciales. |
+| El runtime elegido no está instalado, configurado o autenticado localmente | Detené el despacho. La persona resuelve el estado local del CLI en el host destino; nunca se envían credenciales ni se automatiza login. |
+| Runtime desconocido o fuera de `allowed_runtimes` | Corregí sólo la selección de runtime o pedí que la persona ajuste el allowlist local del destino; no intentes enviar flags ni abrir un shell. |
 | `ACTIVITY_RECORD_FAILED` | Conservá el resultado, inspeccioná el registro local y decidí con una persona si corresponde repetir. |
 
 Para recuperación o eliminación controlada, seguí [rollback.md](rollback.md). Para preflight y pruebas de ida y vuelta, seguí [validation.md](validation.md).

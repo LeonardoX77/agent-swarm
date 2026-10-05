@@ -35,6 +35,7 @@ class RunbookSafetyTests(unittest.TestCase):
         request = json.loads((ROOT / 'automation' / 'agent-fabric' / 'examples' / 'task-request.example.json').read_text(encoding='utf-8'))
         self.assertEqual(1, request['version'])
         self.assertEqual('macbook', request['initiator'])
+        self.assertEqual('pi', request['runtime'])
         self.assertEqual('.', request['relative_path'])
         self.assertLessEqual(request['timeout_seconds'], 900)
         self.assertNotIn('password', json.dumps(request).lower())
@@ -45,6 +46,23 @@ class RunbookSafetyTests(unittest.TestCase):
             'sharing -a /Users/leo/projects -S agent-projects -s 001 -g 000 -R 0',
             content,
         )
+
+    def test_docs_state_closed_runtime_commands_and_local_boundaries(self):
+        content = '\n'.join([
+            (ROOT / 'README.md').read_text(encoding='utf-8'),
+            (ROOT / 'docs' / 'architecture.md').read_text(encoding='utf-8'),
+            *((ROOT / 'docs' / 'setup' / name).read_text(encoding='utf-8') for name in ('macbook.md', 'mac-mini.md')),
+            *((RUNBOOKS / name).read_text(encoding='utf-8') for name in ('operation.md', 'validation.md', 'rollback.md')),
+        ])
+        for fragment in (
+            'runtime: pi', 'runtime: opencode', 'runtime: claude', 'allowed_runtimes',
+            'pi -p --approve --name fabric-<request_id> -- <prompt>',
+            'opencode run -- <prompt>',
+            'claude -p --permission-prompts none -- <prompt>',
+            'no es un sandbox', 'no copia credenciales', 'no automatiza login',
+        ):
+            self.assertIn(fragment, content.lower(), fragment)
+        self.assertNotIn('opencode run --auto', content.lower())
 
     def test_docs_reject_obsolete_or_unsafe_operations(self):
         content = '\n'.join([

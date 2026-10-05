@@ -2,7 +2,7 @@
 import re
 import uuid
 
-FIELDS = {'version', 'request_id', 'workspace', 'relative_path', 'prompt', 'initiator', 'timeout_seconds'}
+FIELDS = {'version', 'request_id', 'workspace', 'relative_path', 'prompt', 'runtime', 'initiator', 'timeout_seconds'}
 SECRET_WORDS = ('password', 'secret', 'token', 'credential', 'key', 'private')
 WORKSPACE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
 
@@ -27,6 +27,8 @@ def validate_request(value):
     if path != '.' and any(part in ('', '.', '..') for part in path.split('/')):
         raise ValueError('INVALID_TASK_REQUEST')
     if not isinstance(value['prompt'], str) or not value['prompt'].strip() or len(value['prompt'].encode('utf-8')) > 16384:
+        raise ValueError('INVALID_TASK_REQUEST')
+    if value['runtime'] not in ('pi', 'opencode', 'claude'):
         raise ValueError('INVALID_TASK_REQUEST')
     if value['initiator'] not in ('macbook', 'mac-mini'):
         raise ValueError('INVALID_TASK_REQUEST')

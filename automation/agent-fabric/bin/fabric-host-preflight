@@ -15,7 +15,7 @@ def preflight(config):
     config = load_config(config)
     diagnostics = []
     if getpass.getuser() != config['expected_user']: diagnostics.append('EXPECTED_USER_MISMATCH')
-    for binary in ('pi', 'ssh'):
+    for binary in ('ssh', *config['allowed_runtimes']):
         if not shutil.which(binary): diagnostics.append('BINARY_UNAVAILABLE')
     for root in config['workspace_roots'].values():
         path = Path(root)

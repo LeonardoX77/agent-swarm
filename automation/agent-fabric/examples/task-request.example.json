@@ -4,6 +4,7 @@
   "workspace": "mac-agent-fabric",
   "relative_path": ".",
   "prompt": "Read only: report the current working directory and the repository name. Do not modify files, configuration, or network state.",
+  "runtime": "pi",
   "initiator": "macbook",
   "timeout_seconds": 120
 }

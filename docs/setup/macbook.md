@@ -4,7 +4,7 @@ Esta guía deja a `leo` como autoridad del workspace y como destino SSH restring
 
 ## Camino rápido
 
-1. Confirmá el preflight y la instalación local de Pi + Gentle Pi.
+1. Confirmá el preflight y la instalación/configuración local de Pi + Gentle Pi, OpenCode y Claude Code.
 2. Publicá sólo `agent-projects`, montá las claves SSH dedicadas y copiá el runtime bajo `HOME`.
 3. Probá el comando forzado y una solicitud inocua antes de despachar trabajo real.
 
@@ -20,15 +20,11 @@ id -un leo
 [ -d /Users/leo/projects ]
 python3 automation/agent-fabric/bin/fabric-host-preflight --help
 pi --version
+opencode --version
+claude --version
 ```
 
-Instalá Pi y Gentle Pi sólo con el método aprobado para `leo`, desde una terminal local. Para verificar la autenticación sin imprimir tokens, abrí `pi` de forma interactiva y usá `/login` si Pi lo solicita o necesitás seleccionar un proveedor; luego salí y ejecutá este chequeo inocuo en modo print:
-
-```sh
-pi -p "Respondé únicamente: verificación local correcta."
-```
-
-Pi no documenta `pi auth status`; repetí `pi --version` y este flujo local en su lugar. Gentle Pi, sus sesiones, cachés, skills y Keychain permanecen locales; las skills compartidas se clonan por Git localmente.
+Instalá Pi + Gentle Pi, OpenCode y Claude Code sólo con el método aprobado para `leo`, desde una terminal local. Verificá manualmente la autenticación o configuración de cada CLI mediante su flujo local habitual y un prompt inocuo; no imprimas tokens. Para Pi, abrí `pi` y usá `/login` si lo solicita; Pi no documenta `pi auth status`. No copies credenciales ni automatices login: el preflight sólo comprueba la presencia de los tres binarios, no su autenticación ni configuración interna. Gentle Pi, OpenCode, Claude Code, sus sesiones, cachés, skills y Keychain permanecen locales; las skills compartidas se clonan por Git localmente.
 
 ## Publicar el único share SMB
 
@@ -90,7 +86,7 @@ python3 -m unittest discover -s automation/agent-fabric/test
 ssh -o BatchMode=yes -o RequestTTY=no agent-fabric-mac-mini true
 ```
 
-El segundo comando suministra intencionalmente un comando remoto (`true`): el comando forzado debe rechazarlo y nunca abrir una shell. La ruta de éxito es enviar por stdin una solicitud JSON válida mediante `fabric-dispatch`, con un prompt inocuo; eso valida el flujo completo. Confirmá que `/Users/leo/projects/leo/mac-agent-fabric` existe y que la actividad queda en `~/.local/state/agent-fabric/activity.jsonl`.
+El segundo comando suministra intencionalmente un comando remoto (`true`): el comando forzado debe rechazarlo y nunca abrir una shell. La ruta de éxito es enviar por stdin solicitudes JSON válidas mediante `fabric-dispatch`, con prompts inocuos que seleccionen `runtime` `pi`, `opencode` y `claude`; eso valida los tres flujos completos. Cada host controla independientemente su `allowed_runtimes`. Confirmá que `/Users/leo/projects/leo/mac-agent-fabric` existe y que la actividad queda en `~/.local/state/agent-fabric/activity.jsonl`.
 
 Para retirar sólo los archivos que instaló el helper en esta cuenta:
 

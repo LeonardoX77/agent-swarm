@@ -2,6 +2,10 @@
 
 Revertí sólo recursos que la instalación de Fabric haya creado y sólo en el host local. La reversión requiere presencia humana para cada cambio de sistema o credencial.
 
+## Contención por runtime
+
+Antes de retirar infraestructura, podés reducir el alcance de ejecución sin afectar el otro host: editá localmente `allowed_runtimes` en la configuración del host y conservá sólo los runtimes que la persona autorice. Por ejemplo, un host puede permitir sólo `pi` mientras el otro conserva `opencode` y `claude`. Cada request sigue declarando `runtime`, y el runner rechaza localmente los valores fuera de su allowlist. No copies configuración, credenciales ni sesiones entre hosts, no agregues flags a la solicitud y no uses el comando SSH forzado como si sandboxeara a los agentes.
+
 ## Antes de revertir
 
 1. Confirmá que no hay un despacho activo y avisá a la otra persona: no hay locks que lo impidan.
@@ -33,12 +37,13 @@ Si informa que no existe manifest o que es inválido, detenete. No borres manual
 ## Orden recomendado
 
 1. Detené nuevos despachos con coordinación humana y guardá evidencia saneada.
-2. Quitá la línea restringida de `authorized_keys` en cada destino, verificando que corresponde a la clave dedicada correcta.
-3. Quitá los aliases y claves dedicadas de cada originador.
-4. Revertí el runtime con el helper y verificá que no eliminó archivos ajenos.
-5. En la Mac mini, desmontá el mount y quitá sólo su login item o configuración persistente de Fabric.
-6. En la MacBook, quitá sólo el share `agent-projects` de Fabric.
-7. Evaluá la membresía de Remote Login al final y retirala únicamente cuando fue creada para Fabric.
+2. Si necesitás contención gradual, reducí `allowed_runtimes` de forma independiente en cada host antes de retirar el transporte.
+3. Quitá la línea restringida de `authorized_keys` en cada destino, verificando que corresponde a la clave dedicada correcta.
+4. Quitá los aliases y claves dedicadas de cada originador.
+5. Revertí el runtime con el helper y verificá que no eliminó archivos ajenos.
+6. En la Mac mini, desmontá el mount y quitá sólo su login item o configuración persistente de Fabric.
+7. En la MacBook, quitá sólo el share `agent-projects` de Fabric.
+8. Evaluá la membresía de Remote Login al final y retirala únicamente cuando fue creada para Fabric.
 
 ## Nunca elimines
 

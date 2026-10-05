@@ -11,8 +11,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
 CLI = ROOT / 'bin' / 'fabric-dispatch'
-REQUEST = {'version': 1, 'request_id': '550e8400-e29b-41d4-a716-446655440000', 'workspace': 'mac-agent-fabric', 'relative_path': '.', 'prompt': 'Inspect.', 'initiator': 'macbook', 'timeout_seconds': 30}
-CONFIG = {'version': 1, 'role': 'macbook', 'expected_user': 'leo', 'max_timeout_seconds': 60, 'workspace_roots': {'mac-agent-fabric': '/tmp/workspace'}, 'ssh_aliases': {'mac-mini': 'agent-fabric-mac-mini'}}
+REQUEST = {'version': 1, 'request_id': '550e8400-e29b-41d4-a716-446655440000', 'workspace': 'mac-agent-fabric', 'relative_path': '.', 'prompt': 'Inspect.', 'runtime': 'pi', 'initiator': 'macbook', 'timeout_seconds': 30}
+CONFIG = {'version': 1, 'role': 'macbook', 'expected_user': 'leo', 'max_timeout_seconds': 60, 'workspace_roots': {'mac-agent-fabric': '/tmp/workspace'}, 'ssh_aliases': {'mac-mini': 'agent-fabric-mac-mini'}, 'allowed_runtimes': ['pi', 'opencode', 'claude']}
 
 
 def module():

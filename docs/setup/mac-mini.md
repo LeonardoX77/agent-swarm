@@ -4,7 +4,7 @@ Esta guía prepara a `jarvis` como nodo de ejecución y cliente SMB. Hacé cada 
 
 ## Camino rápido
 
-1. Confirmá la cuenta humana `jarvis`, Pi + Gentle Pi locales y el montaje SMB autenticado de forma interactiva.
+1. Confirmá la cuenta humana `jarvis`, Pi + Gentle Pi, OpenCode y Claude Code locales, y el montaje SMB autenticado de forma interactiva.
 2. Creá la clave SSH dedicada, configurá el alias a la MacBook e instalá el runtime bajo `HOME`.
 3. Instalá manualmente la línea de comando forzado y validá ambos sentidos sin obtener una shell.
 
@@ -17,15 +17,11 @@ whoami                         # debe imprimir jarvis
 id -un jarvis
 [ -d /Volumes ]
 pi --version
+opencode --version
+claude --version
 ```
 
-Instalá Pi y Gentle Pi como `jarvis` mediante el flujo local aprobado. Para verificar la autenticación sin imprimir tokens, abrí `pi` de forma interactiva y usá `/login` si Pi lo solicita o necesitás seleccionar un proveedor; luego salí y ejecutá este chequeo inocuo en modo print:
-
-```sh
-pi -p "Respondé únicamente: verificación local correcta."
-```
-
-Pi no documenta `pi auth status`; repetí `pi --version` y este flujo local en su lugar. No copies HOME, Keychain, credenciales, sesiones, cachés ni configuración desde la MacBook. Si compartís skills, cloná su repositorio Git en una ruta local de `jarvis`.
+Instalá Pi + Gentle Pi, OpenCode y Claude Code como `jarvis` mediante el flujo local aprobado. Verificá manualmente la autenticación o configuración de cada CLI mediante su flujo local habitual y un prompt inocuo, sin imprimir tokens; para Pi, abrí `pi` y usá `/login` si lo solicita, pues Pi no documenta `pi auth status`. El preflight sólo comprueba la presencia de los tres binarios, no su autenticación ni configuración interna: no copies credenciales ni automatices login. No copies HOME, Keychain, credenciales, sesiones, cachés ni configuración desde la MacBook. Si compartís skills, cloná su repositorio Git en una ruta local de `jarvis`.
 
 ## Montar el workspace por SMB
 
@@ -86,7 +82,7 @@ python3 -m unittest discover -s automation/agent-fabric/test
 ssh -o BatchMode=yes -o RequestTTY=no agent-fabric-macbook true
 ```
 
-El segundo comando suministra intencionalmente un comando remoto (`true`): el comando forzado debe rechazarlo y nunca abrir una shell. Antes de operar, la ruta de éxito es enviar por stdin con `fabric-dispatch` una solicitud JSON válida con prompt inocuo y verificar que el runner use `/Volumes/agent-projects/leo/mac-agent-fabric`, timeout máximo de 900 segundos y el log local `~/.local/state/agent-fabric/activity.jsonl`.
+El segundo comando suministra intencionalmente un comando remoto (`true`): el comando forzado debe rechazarlo y nunca abrir una shell. Antes de operar, la ruta de éxito es enviar por stdin con `fabric-dispatch` solicitudes JSON válidas con prompts inocuos para `runtime` `pi`, `opencode` y `claude`, y verificar que el runner use `/Volumes/agent-projects/leo/mac-agent-fabric`, timeout máximo de 900 segundos y el log local `~/.local/state/agent-fabric/activity.jsonl`. Cada host puede restringir su propio `allowed_runtimes`.
 
 Para eliminar sólo los archivos que instaló el helper para `jarvis`:
 

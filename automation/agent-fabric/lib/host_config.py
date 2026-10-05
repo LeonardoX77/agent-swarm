@@ -1,7 +1,7 @@
 """Strict local-only host configuration validation."""
 from pathlib import Path
 
-REQUIRED = {'version', 'role', 'expected_user', 'max_timeout_seconds', 'workspace_roots', 'ssh_aliases'}
+REQUIRED = {'version', 'role', 'expected_user', 'max_timeout_seconds', 'workspace_roots', 'ssh_aliases', 'allowed_runtimes'}
 OPTIONAL = {'activity_record'}
 SECRET_WORDS = ('password', 'secret', 'token', 'credential', 'key', 'private')
 
@@ -20,7 +20,10 @@ def load_config(value):
         raise ValueError('INVALID_HOST_CONFIG')
     roots = value['workspace_roots']
     aliases = value['ssh_aliases']
+    allowed_runtimes = value['allowed_runtimes']
     if not isinstance(roots, dict) or not roots or not isinstance(aliases, dict):
+        raise ValueError('INVALID_HOST_CONFIG')
+    if not isinstance(allowed_runtimes, list) or not allowed_runtimes or any(not isinstance(runtime, str) or runtime not in ('pi', 'opencode', 'claude') for runtime in allowed_runtimes) or len(allowed_runtimes) != len(set(allowed_runtimes)):
         raise ValueError('INVALID_HOST_CONFIG')
     for workspace, root in roots.items():
         if not isinstance(workspace, str) or not workspace or not isinstance(root, str) or not Path(root).is_absolute():
