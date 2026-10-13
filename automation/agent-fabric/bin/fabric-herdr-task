@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Submit, recover, or close one owned host-local Pi/Herdr task."""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1] / 'lib'))
+from herdr_task import Controller, TaskError
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', choices=('submit', 'recover', 'close'))
+    parser.add_argument('task_id', nargs='?')
+    parser.add_argument('--state-dir')
+    parser.add_argument('--project-root')
+    parser.add_argument('--herdr')
+    parser.add_argument('--timeout', type=int, default=30)
+    args = parser.parse_args()
+    try:
+        controller = Controller(args.state_dir, herdr=args.herdr, project_root=args.project_root, timeout=args.timeout)
+        if args.action == 'submit':
+            if args.task_id is not None:
+                raise TaskError('SUBMIT_STDIN_ONLY')
+            raw = sys.stdin.buffer.read(65537)
+            if len(raw) > 65536:
+                raise TaskError('INPUT_TOO_LARGE')
+            result = controller.submit(json.loads(raw))
+        elif not args.task_id:
+            raise TaskError('MISSING_TASK_ID')
+        elif args.action == 'recover':
+            result = controller.recover(args.task_id)
+        else:
+            result = controller.close(args.task_id)
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        print(json.dumps({'status': 'failed', 'diagnostic_code': str(error) or 'INVALID_INPUT'}, sort_keys=True))
+        return 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
