@@ -35,11 +35,11 @@ python3 automation/agent-fabric/bin/fabric-dispatch \
   < "$HOME/.local/share/agent-fabric/requests/macbook-to-mini.json"
 ```
 
-El dispatcher usa el alias local `agent-fabric-mac-mini`, que se autentica como `jarvis` y llega sólo al runner forzado.
+El dispatcher usa el alias local `agent-fabric-mac-mini`, que se autentica como `leo` en la Mac mini y llega sólo al runner forzado. El nombre coincidente no comparte HOME ni credenciales con la MacBook.
 
 ### Mac mini → MacBook
 
-En la Mac mini, como `jarvis`, creá la solicitud local con un UUID nuevo y un runtime permitido por la MacBook. Este comando sólo escribe el archivo de solicitud; revisalo antes de despacharlo.
+En la Mac mini, como `leo`, creá la solicitud local con un UUID nuevo y un runtime permitido por la MacBook. Este comando sólo escribe el archivo de solicitud; revisalo antes de despacharlo.
 
 ```sh
 cat > "$HOME/.local/share/agent-fabric/requests/mac-mini-to-macbook.json" <<'JSON'
@@ -62,7 +62,7 @@ El dispatcher usa `agent-fabric-macbook`, se autentica como `leo` y llega sólo 
 
 El identificador lógico es el mismo en ambos hosts, pero el runner resuelve una ruta local. Nunca envíes una ruta del otro host.
 
-| `workspace` | MacBook (`leo`) | Mac mini (`jarvis`) |
+| `workspace` | MacBook (`leo`) | Mac mini (`leo`) |
 |---|---|---|
 | `mac-agent-fabric` | `/Users/leo/projects/leo/mac-agent-fabric` | `/Volumes/agent-projects/leo/mac-agent-fabric` |
 

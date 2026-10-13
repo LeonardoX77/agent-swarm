@@ -21,7 +21,7 @@ def config(directory, allowed_runtimes=('pi', 'opencode', 'claude'), **optional)
     return {
         'version': 1,
         'role': 'mac-mini',
-        'expected_user': 'jarvis',
+        'expected_user': 'leo',
         'max_timeout_seconds': 60,
         'workspace_roots': {'mac-agent-fabric': directory},
         'ssh_aliases': {},
@@ -61,7 +61,7 @@ class RunnerTests(unittest.TestCase):
         }
         for runtime, argv in expected_argv.items():
             with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
-                with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run', return_value=subprocess.CompletedProcess([], 0, 'done', '')) as run:
+                with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run', return_value=subprocess.CompletedProcess([], 0, 'done', '')) as run:
                     result = runner.run_task({**REQUEST, 'runtime': runtime}, config(directory))
                     self.assertEqual(result['status'], 'succeeded')
                     self.assertEqual(run.call_args.args[0], argv)
@@ -73,7 +73,7 @@ class RunnerTests(unittest.TestCase):
     def test_rejects_runtime_not_allowed_by_destination_before_process_execution(self):
         runner = module()
         with tempfile.TemporaryDirectory() as directory:
-            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run') as run:
+            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run') as run:
                 with self.assertRaisesRegex(ValueError, 'RUNTIME_NOT_ALLOWED'):
                     runner.run_task({**REQUEST, 'runtime': 'claude'}, config(directory, ('pi',)))
         run.assert_not_called()
@@ -81,7 +81,7 @@ class RunnerTests(unittest.TestCase):
     def test_rejects_dangerous_environment_before_invoking_mocked_pi(self):
         runner = module()
         with tempfile.TemporaryDirectory() as directory:
-            with patch.dict(os.environ, {'NODE_OPTIONS': '--require injected'}, clear=True), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run') as run:
+            with patch.dict(os.environ, {'NODE_OPTIONS': '--require injected'}, clear=True), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run') as run:
                 with self.assertRaisesRegex(ValueError, 'UNSAFE_ENVIRONMENT'):
                     runner.run_task(REQUEST, config(directory))
             run.assert_not_called()
@@ -90,7 +90,7 @@ class RunnerTests(unittest.TestCase):
         runner = module()
         with tempfile.TemporaryDirectory() as directory:
             stdout = 'é' * (runner.process.MAX_OUTPUT_BYTES // 2 + 1)
-            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run', return_value=subprocess.CompletedProcess([], 0, stdout, 'sensitive stderr')):
+            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run', return_value=subprocess.CompletedProcess([], 0, stdout, 'sensitive stderr')):
                 result = runner.run_task(REQUEST, config(directory))
         self.assertEqual(result['status'], 'succeeded')
         self.assertIn('output', result)
@@ -101,7 +101,7 @@ class RunnerTests(unittest.TestCase):
     def test_surfaces_activity_record_failure_as_warning_without_retrying(self):
         runner = module()
         with tempfile.TemporaryDirectory() as directory:
-            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run', return_value=subprocess.CompletedProcess([], 0, 'done', '')), patch.object(runner, 'write_event', side_effect=OSError('unavailable')) as write:
+            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run', return_value=subprocess.CompletedProcess([], 0, 'done', '')), patch.object(runner, 'write_event', side_effect=OSError('unavailable')) as write:
                 result = runner.run_task(REQUEST, config(directory, activity_record='/var/log/fabric.jsonl'))
         self.assertEqual(result['status'], 'succeeded')
         self.assertEqual(result['warnings'], ['ACTIVITY_RECORD_FAILED'])
@@ -116,10 +116,10 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             outside = Path(directory).parent
             (Path(directory) / 'escape').symlink_to(outside)
-            with patch.dict(os.environ, {'SSH_ORIGINAL_COMMAND': 'bad'}), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run') as run:
+            with patch.dict(os.environ, {'SSH_ORIGINAL_COMMAND': 'bad'}), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run') as run:
                 with self.assertRaises(ValueError):
                     runner.run_task(REQUEST, config(directory))
-            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run') as run:
+            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run') as run:
                 with self.assertRaises(ValueError):
                     runner.run_task({**REQUEST, 'relative_path': 'escape'}, config(directory))
             run.assert_not_called()
@@ -127,7 +127,7 @@ class RunnerTests(unittest.TestCase):
     def test_rejects_wrong_effective_user_before_invoking_pi(self):
         runner = module()
         with tempfile.TemporaryDirectory() as directory:
-            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='leo'), patch.object(runner.process, 'run') as run:
+            with patch.dict(os.environ, {}, clear=True), patch.object(runner, 'effective_user', return_value='jarvis'), patch.object(runner.process, 'run') as run:
                 with self.assertRaisesRegex(ValueError, 'UNEXPECTED_USER'):
                     runner.run_task(REQUEST, config(directory))
             run.assert_not_called()

@@ -1,27 +1,27 @@
-# Configurar la Mac mini (`jarvis`)
+# Configurar la Mac mini (`leo`)
 
-Esta guía prepara a `jarvis` como nodo de ejecución y cliente SMB. Hacé cada paso en la Mac mini; las acciones marcadas **privilegiado** requieren presencia humana y `sudo` local.
+Esta guía prepara la cuenta existente `leo` como nodo de ejecución y cliente SMB. El mismo nombre que en la MacBook no comparte HOME, credenciales, Keychain, sesiones ni configuración. Hacé cada paso en la Mac mini; las acciones marcadas **privilegiado** requieren presencia humana y `sudo` local. Antes de aplicar cambios, seguí la [instalación guiada por agente](agent-guided-setup.md), que ordena las comprobaciones, las pausas humanas y la reanudación segura; esta página aporta el procedimiento específico de Mac mini. Tras verificar el workspace y runtime autorizados, la [fase 6: futura skill global de tareas remotas](agent-guided-setup.md#6-diseñar-la-futura-skill-global-para-tareas-remotas-sin-crearla-ni-instalarla) define sólo su diseño y la validación pendiente; no instala nada.
 
 ## Camino rápido
 
-1. Confirmá la cuenta humana `jarvis`, Pi + Gentle Pi, OpenCode y Claude Code locales, y el montaje SMB autenticado de forma interactiva.
+1. Confirmá la cuenta existente `leo`, Pi + Gentle Pi, OpenCode y Claude Code locales, y el montaje SMB autenticado de forma interactiva.
 2. Creá la clave SSH dedicada, configurá el alias a la MacBook e instalá el runtime bajo `HOME`.
 3. Instalá manualmente la línea de comando forzado y validá ambos sentidos sin obtener una shell.
 
 ## Prerrequisitos y preflight seguro
 
-`jarvis` es una cuenta creada por una persona antes de esta guía; este procedimiento no crea usuarios ni administra contraseñas.
+`leo` es una cuenta existente en la Mac mini; este procedimiento no crea ni modifica usuarios, ni administra contraseñas.
 
 ```sh
-whoami                         # debe imprimir jarvis
-id -un jarvis
+whoami                         # debe imprimir leo
+id -un leo
 [ -d /Volumes ]
 pi --version
 opencode --version
 claude --version
 ```
 
-Instalá Pi + Gentle Pi, OpenCode y Claude Code como `jarvis` mediante el flujo local aprobado. Verificá manualmente la autenticación o configuración de cada CLI mediante su flujo local habitual y un prompt inocuo, sin imprimir tokens; para Pi, abrí `pi` y usá `/login` si lo solicita, pues Pi no documenta `pi auth status`. El preflight sólo comprueba la presencia de los tres binarios, no su autenticación ni configuración interna: no copies credenciales ni automatices login. No copies HOME, Keychain, credenciales, sesiones, cachés ni configuración desde la MacBook. Si compartís skills, cloná su repositorio Git en una ruta local de `jarvis`.
+Instalá Pi + Gentle Pi, OpenCode y Claude Code como `leo` mediante el flujo local aprobado. Verificá manualmente la autenticación o configuración de cada CLI mediante su flujo local habitual y un prompt inocuo, sin imprimir tokens; para Pi, abrí `pi` y usá `/login` si lo solicita, pues Pi no documenta `pi auth status`. El preflight sólo comprueba la presencia de los tres binarios, no su autenticación ni configuración interna: no copies credenciales ni automatices login. No copies HOME, Keychain, credenciales, sesiones, cachés ni configuración desde la MacBook. Si compartís skills, cloná su repositorio Git en una ruta local de esta Mac mini.
 
 ## Montar el workspace por SMB
 
@@ -40,7 +40,7 @@ mount | grep 'agent-projects'
 
 No pongas la contraseña SMB en scripts, JSON, archivos de configuración ni logs. Para reconectar al iniciar sesión, agregá el volumen montado a **System Settings → General → Login Items → Open at Login**. Keychain gestiona la credencial; ningún script debe almacenarla.
 
-En **System Settings → General → Sharing → Remote Login**, activá Remote Login y elegí “Only these users”, agregando sólo `jarvis`. Esto es **privilegiado**, local y necesario para el despacho inverso desde MacBook. No habilites Remote Management ni shell general para la clave del fabric.
+En **System Settings → General → Sharing → Remote Login**, activá Remote Login y elegí “Only these users”, agregando sólo `leo` de esta Mac mini. Esto es **privilegiado**, local y necesario para el despacho inverso desde MacBook. No habilites Remote Management ni shell general para la clave del fabric.
 
 ## Clave y alias SSH
 
@@ -84,7 +84,7 @@ ssh -o BatchMode=yes -o RequestTTY=no agent-fabric-macbook true
 
 El segundo comando suministra intencionalmente un comando remoto (`true`): el comando forzado debe rechazarlo y nunca abrir una shell. Antes de operar, la ruta de éxito es enviar por stdin con `fabric-dispatch` solicitudes JSON válidas con prompts inocuos para `runtime` `pi`, `opencode` y `claude`, y verificar que el runner use `/Volumes/agent-projects/leo/mac-agent-fabric`, timeout máximo de 900 segundos y el log local `~/.local/state/agent-fabric/activity.jsonl`. Cada host puede restringir su propio `allowed_runtimes`.
 
-Para eliminar sólo los archivos que instaló el helper para `jarvis`:
+Para eliminar sólo los archivos que instaló el helper para `leo` en esta Mac mini:
 
 ```sh
 python3 automation/agent-fabric/bin/fabric-install-runtime --revert

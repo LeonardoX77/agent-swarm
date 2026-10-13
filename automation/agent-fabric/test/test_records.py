@@ -10,7 +10,7 @@ class RecordsTests(unittest.TestCase):
    data=json.loads(path.read_text()); self.assertEqual(data['details'], {'host_alias':'safe'}); self.assertEqual(data['record_version'],1)
  def test_allows_delivered_activity_destinations_for_their_effective_users(self):
   hosts = Path(__file__).parents[3] / 'config'
-  for role, user in (('macbook', 'leo'), ('mac-mini', 'jarvis')):
+  for role, user in (('macbook', 'leo'), ('mac-mini', 'leo')):
    destination = json.loads((hosts / role / 'host.json').read_text(encoding='utf-8'))['activity_record']
    with patch('records.effective_user', return_value=user): self.assertTrue(local_destination(destination))
   with patch('records.effective_user', return_value='leo'):

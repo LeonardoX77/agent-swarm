@@ -3,7 +3,7 @@
 # Do not use an invented hostname.
 Host agent-fabric-mac-mini
     HostName <MAC_MINI_LAN_OR_TAILSCALE_ENDPOINT>
-    User jarvis
+    User leo
     IdentityFile ~/.ssh/agent-fabric-macbook-to-mac-mini
     IdentitiesOnly yes
     BatchMode yes

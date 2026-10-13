@@ -13,11 +13,11 @@ Quedan fuera de v1: RPC de Pi, shell SSH genérico, reenvío de puertos del rout
 | Host | Cuenta | Rol local | Espacio de trabajo | Responsabilidades |
 |---|---|---|---|---|
 | MacBook | `leo` | Autoridad de `/Users/leo/projects` y servidor SMB | `/Users/leo/projects`; share `agent-projects` | Publicar únicamente el workspace, mantener Pi + Gentle Pi, OpenCode y Claude Code configurados localmente para `leo`, montar el runner SSH local y permitir sus runtimes locales elegidos. |
-| Mac mini | `jarvis` | Nodo de ejecución y cliente SMB | `/Volumes/agent-projects` | La persona crea `jarvis` manualmente, monta el share como `leo`, mantiene Pi + Gentle Pi, OpenCode y Claude Code configurados localmente para `jarvis`, monta el runner SSH local y permite sus runtimes locales elegidos. |
+| Mac mini | `leo` existente | Nodo de ejecución y cliente SMB | `/Volumes/agent-projects` | Usa la cuenta existente `leo`, monta el share como `leo`, mantiene Pi + Gentle Pi, OpenCode y Claude Code configurados localmente para esa cuenta, monta el runner SSH local y permite sus runtimes locales elegidos. No crea ni modifica cuentas. |
 
 Ambos hosts tienen conectividad por LAN y Tailscale. Sus configuraciones SSH locales exponen los aliases `agent-fabric-macbook` y `agent-fabric-mac-mini`; no se abre ni reenvía ningún puerto en el router.
 
-Cada host instala, actualiza y autentica sus propios Pi + Gentle Pi, OpenCode y Claude Code. El preflight sólo comprueba la presencia de los binarios; durante el setup, una persona verifica por separado la autenticación y configuración local de cada CLI. El procedimiento no copia credenciales y no automatiza login. Nunca se copian entre hosts `HOME`, dotfiles, Keychain, credenciales, tokens, configuración de runtime, sesiones, cachés ni logs. Las skills compartidas viven en un repositorio Git y cada host las consume desde su clon local; SMB no transporta skills.
+Cada host instala, actualiza y autentica sus propios Pi + Gentle Pi, OpenCode y Claude Code. El preflight sólo comprueba la presencia de los binarios; durante el setup, una persona verifica por separado la autenticación y configuración local de cada CLI. El procedimiento no copia credenciales y no automatiza login. Aunque ambas cuentas se llamen `leo`, nunca se copian ni comparten entre hosts `HOME`, dotfiles, Keychain, credenciales, tokens, configuración de runtime, sesiones, cachés ni logs. Las skills compartidas viven en un repositorio Git y cada host las consume desde su clon local; SMB no transporta skills.
 
 ## Flujo de despacho
 
@@ -59,7 +59,7 @@ El único transporte de la solicitud es stdin. No se ponen prompts, rutas ni JSO
 
 El runner resuelve el workspace configurado y concatena únicamente un `relative_path` validado. Luego canoniza los ancestros existentes y rechaza cualquier resultado que salga de la raíz. La tabla de mapeo es local a cada host y debe contener el mismo identificador lógico, no rutas remotas suministradas por el llamador:
 
-| `workspace` | MacBook (`leo`) | Mac mini (`jarvis`) |
+| `workspace` | MacBook (`leo`) | Mac mini (`leo`) |
 |---|---|---|
 | `mac-agent-fabric` | `/Users/leo/projects/leo/mac-agent-fabric` | `/Volumes/agent-projects/leo/mac-agent-fabric` |
 
@@ -73,7 +73,7 @@ Esto crea un límite de **transporte**, no un sandbox de ejecución:
 
 - La clave permite alcanzar sólo el runner forzado, no un shell SSH genérico.
 - El runner limita el protocolo, el workspace y el directorio de trabajo.
-- Una vez iniciado, el runtime remoto tiene la autoridad efectiva del usuario destino: `leo` en la MacBook o `jarvis` en la Mac mini.
+- Una vez iniciado, el runtime remoto tiene la autoridad efectiva de `leo` en el host destino. Que ambas cuentas tengan el mismo nombre no comparte su HOME, credenciales ni estado local.
 - El comando forzado no puede restringir las herramientas que Pi, OpenCode o Claude Code ya pueden usar bajo esa cuenta. Si un runtime tiene permiso para leer, escribir o ejecutar algo, esa capacidad sigue existiendo dentro de los permisos de la cuenta y las políticas locales.
 - No se delegan contraseñas, tokens, acceso al Keychain ni `sudo`. Toda configuración que requiera privilegios se ejecuta interactivamente y sólo en el host local.
 
@@ -110,7 +110,7 @@ Una recuperación nunca borra contenido del workspace, datos de Keychain, cuenta
 
 La secuencia se ejecuta en este orden. Los pasos privilegiados requieren presencia humana en el host indicado y `sudo` interactivo local.
 
-1. **Preparar identidades locales.** La persona crea `jarvis` en la Mac mini. Se instalan y autentican Pi + Gentle Pi, OpenCode y Claude Code por separado como `leo` y como `jarvis`; se verifican binarios y configuración local sin copiar credenciales ni automatizar login.
+1. **Preparar identidades locales.** La Mac mini usa su cuenta existente `leo`; esta secuencia no crea ni modifica cuentas. Se instalan y autentican Pi + Gentle Pi, OpenCode y Claude Code por separado en cada host como `leo`; se verifican binarios y configuración local sin copiar credenciales ni automatizar login.
 2. **Publicar y montar el workspace.** En la MacBook, configurar localmente el share SMB `agent-projects` para `/Users/leo/projects`. En la Mac mini, montar en `/Volumes/agent-projects` como `leo` e ingresar la autenticación SMB interactivamente para Keychain.
 3. **Clonar skills.** Clonar el repositorio Git de skills en rutas locales de cada host y configurar cada instalación de Pi para usar su clon, sin apuntar a SMB.
 4. **Crear identidad SSH restringida.** Generar claves dedicadas por dirección, instalar sus públicas con el comando forzado `fabric-runner` y las restricciones de forwarding/PTY, y resguardar cada privada sólo en el host originador.
@@ -126,7 +126,7 @@ La secuencia se ejecuta en este orden. Los pasos privilegiados requieren presenc
 | Punto de entrada | `README.md` | Resume v1 y dirige a esta arquitectura. |
 | Arquitectura | `docs/architecture.md` | Contrato, límites, secuencia y decisiones autoritativas. |
 | Configuración de host MacBook | `config/macbook/` | Define sólo la instalación local de `leo`, SMB y aliases/runner del host. |
-| Configuración de host Mac mini | `config/mac-mini/` | Define sólo la instalación local de `jarvis`, el montaje y aliases/runner del host. |
+| Configuración de host Mac mini | `config/mac-mini/` | Define sólo la instalación local de `leo`, el montaje y aliases/runner del host. |
 | Dispatcher | `automation/agent-fabric/bin/fabric-dispatch` | Valida y envía JSON por stdin al alias SSH seleccionado. |
 | Runner forzado | `automation/agent-fabric/bin/fabric-runner` | Valida JSON, allowlist y paths; ejecuta sólo el argv cerrado del runtime local elegido. |
 | Registro de actividad | `automation/agent-fabric/bin/fabric-activity` | Escribe observabilidad local saneada sin locks. |

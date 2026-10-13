@@ -2,9 +2,11 @@
 
 Validá en orden y detenete ante la primera falla. Las comprobaciones de **solo lectura** no configuran hosts; los despachos de aceptación ejecutan el prompt inocuo y requieren un gate humano previo.
 
+> Para resultados anteriores, límites conocidos y pruebas que no equivalen a aceptación, consultá el [informe histórico de evidencia](test-evidence.md). No sustituye este checklist ni demuestra un despliegue actual.
+
 ## Checklist ordenado
 
-- [ ] **Solo lectura — identidad local.** En cada host, con la cuenta correcta (`leo` en MacBook y `jarvis` en Mac mini), ejecutá:
+- [ ] **Solo lectura — identidad local.** En cada host, con la cuenta existente `leo` en su propio host, ejecutá:
 
   ```sh
   python3 automation/agent-fabric/bin/fabric-host-preflight --config config/macbook/host.json
@@ -14,11 +16,11 @@ Validá en orden y detenete ante la primera falla. Las comprobaciones de **solo 
 
 - [ ] **Solo lectura — runtimes locales.** Confirmá manualmente en cada cuenta que Pi + Gentle Pi, OpenCode y Claude Code están instalados y que la autenticación/configuración local de cada uno funciona con la política habitual de esa cuenta. Esta comprobación es independiente del preflight; no copies `HOME`, sesiones, cachés, Keychain ni credenciales entre hosts, ni automatices login.
 
-- [ ] **Solo lectura — SMB.** En la MacBook confirmá que el share existente es `agent-projects` y expone sólo `/Users/leo/projects`. En la Mac mini confirmá que `/Volumes/agent-projects` ya está montado y que `jarvis` puede leer y escribir un archivo de prueba acordado por una persona dentro del workspace compartido. Esta prueba de lectura/escritura cambia ese archivo: usá una ruta temporal aprobada y eliminá sólo ese archivo de prueba con la persona presente. Nunca pongas la autenticación SMB en archivos o comandos; macOS la solicita interactivamente y la conserva en el Keychain local.
+- [ ] **Solo lectura — SMB.** En la MacBook confirmá que el share existente es `agent-projects` y expone sólo `/Users/leo/projects`. En la Mac mini confirmá que `/Volumes/agent-projects` ya está montado y que `leo` de la Mac mini puede leer y escribir un archivo de prueba acordado por una persona dentro del workspace compartido. Esta prueba de lectura/escritura cambia ese archivo: usá una ruta temporal aprobada y eliminá sólo ese archivo de prueba con la persona presente. Nunca pongas la autenticación SMB en archivos o comandos; macOS la solicita interactivamente y la conserva en el Keychain local.
 
 - [ ] **Solo lectura — endpoint y huella.** Elegí un endpoint por alias: LAN cuando ambos hosts están en la misma red confiable; Tailscale cuando están fuera de esa LAN o cuando es el camino administrado. No alternes sin actualizar y revisar la configuración local del alias. Confirmá que `StrictHostKeyChecking yes` está presente y que la huella del host fue verificada por un canal confiable antes de aceptar una clave nueva.
 
-- [ ] **Solo lectura — SSH restringido.** Revisá localmente cada plantilla de alias y la línea dedicada de `authorized_keys`: el comando forzado debe usar `restrict,command="…fabric-runner --config …"`, sin PTY ni forwarding. Verificá que el alias de MacBook apunte a `agent-fabric-mac-mini` como `jarvis` y el de Mac mini a `agent-fabric-macbook` como `leo`. No pruebes con shell interactivo, forwarding ni comandos remotos arbitrarios.
+- [ ] **Solo lectura — SSH restringido.** Revisá localmente cada plantilla de alias y la línea dedicada de `authorized_keys`: el comando forzado debe usar `restrict,command="…fabric-runner --config …"`, sin PTY ni forwarding. Verificá que ambos aliases usen `leo` en su host destino: el de MacBook apunta a `agent-fabric-mac-mini` y el de Mac mini a `agent-fabric-macbook`. El mismo nombre no comparte HOME ni credenciales. No pruebes con shell interactivo, forwarding ni comandos remotos arbitrarios.
 
 - [ ] **Solo lectura — red y SMB de base.** Registrá latencia, resolución de nombre y disponibilidad del mount antes del despacho. Compará con una ejecución local previa si existe. Una degradación de LAN, Tailscale o SMB es una razón para detener la aceptación, no para cambiar la red durante esta lista.
 

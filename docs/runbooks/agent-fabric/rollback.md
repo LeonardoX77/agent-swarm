@@ -22,7 +22,7 @@ Antes de retirar infraestructura, podés reducir el alcance de ejecución sin af
 | Claves SSH dedicadas y aliases | Quitá las dos claves privadas dedicadas, sus públicas correspondientes y sólo los bloques `Host agent-fabric-macbook` o `Host agent-fabric-mac-mini` creados para Fabric. |
 | Mac mini | Desmontá `/Volumes/agent-projects` y quitá sólo el login item o mount persistente creado para Fabric. |
 | MacBook | Quitá sólo el share SMB `agent-projects` creado para `/Users/leo/projects`. |
-| Remote Login | Quitá a `leo` o `jarvis` de la membresía de Remote Login sólo si la instalación de Fabric agregó esa membresía y no tiene otro uso autorizado. |
+| Remote Login | Quitá a `leo` de la membresía de Remote Login en el host correspondiente sólo si la instalación de Fabric agregó esa membresía y no tiene otro uso autorizado. |
 
 ## Runtime
 

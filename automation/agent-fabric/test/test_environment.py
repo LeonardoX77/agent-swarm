@@ -11,9 +11,9 @@ from environment import SAFE_PATH, child_environment
 class ChildEnvironmentTests(unittest.TestCase):
     def test_builds_minimal_environment_from_approved_values(self):
         source = {
-            'HOME': '/Users/jarvis',
-            'USER': 'jarvis',
-            'LOGNAME': 'jarvis',
+            'HOME': '/Users/leo',
+            'USER': 'leo',
+            'LOGNAME': 'leo',
             'LANG': 'en_US.UTF-8',
             'LC_CTYPE': 'en_US.UTF-8',
             'SSH_AUTH_SOCK': '/private/tmp/agent.sock',
@@ -21,9 +21,9 @@ class ChildEnvironmentTests(unittest.TestCase):
         }
 
         self.assertEqual(child_environment(source), {
-            'HOME': '/Users/jarvis',
-            'USER': 'jarvis',
-            'LOGNAME': 'jarvis',
+            'HOME': '/Users/leo',
+            'USER': 'leo',
+            'LOGNAME': 'leo',
             'LANG': 'en_US.UTF-8',
             'LC_CTYPE': 'en_US.UTF-8',
             'PATH': SAFE_PATH,

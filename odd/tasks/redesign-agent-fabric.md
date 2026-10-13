@@ -7,7 +7,7 @@ Construir una guía completa y entregables ejecutables para que el agente Pi + G
 ## Decisiones vigentes
 
 - MacBook: usuario `leo`, workspace local `/Users/leo/projects`, share SMB `agent-projects`.
-- Mac mini: usuario nuevo `jarvis`, creado manualmente por el usuario; mount `/Volumes/agent-projects`.
+- Mac mini: cuenta existente `leo`; mount `/Volumes/agent-projects`. El mismo nombre que en la MacBook no comparte HOME, credenciales ni estado local.
 - SSH bidireccional por LAN y Tailscale mediante aliases `agent-fabric-macbook` y `agent-fabric-mac-mini`.
 - Cada solicitud remota ejecuta el Pi + Gentle Pi instalado y autenticado localmente en el host destino.
 - Los pasos privilegiados usan `sudo` interactivo y se ejecutan localmente; nunca se delega la contraseña.

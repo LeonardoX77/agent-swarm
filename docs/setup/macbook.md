@@ -1,6 +1,6 @@
 # Configurar la MacBook (`leo`)
 
-Esta guía deja a `leo` como autoridad del workspace y como destino SSH restringido. Hacé cada paso localmente en la MacBook; los comandos marcados **privilegiado** piden `sudo` interactivo y no deben ejecutarse desde un despacho.
+Esta guía deja a `leo` como autoridad del workspace y como destino SSH restringido. Hacé cada paso localmente en la MacBook; los comandos marcados **privilegiado** piden `sudo` interactivo y no deben ejecutarse desde un despacho. Antes de aplicar cambios, seguí la [instalación guiada por agente](agent-guided-setup.md), que ordena las comprobaciones, las pausas humanas y la reanudación segura; esta página aporta el procedimiento específico de MacBook. Tras verificar el workspace y runtime autorizados, la [fase 6: futura skill global de tareas remotas](agent-guided-setup.md#6-diseñar-la-futura-skill-global-para-tareas-remotas-sin-crearla-ni-instalarla) define sólo su diseño y la validación pendiente; no instala nada.
 
 ## Camino rápido
 
@@ -11,8 +11,8 @@ Esta guía deja a `leo` como autoridad del workspace y como destino SSH restring
 ## Prerrequisitos y preflight seguro
 
 - La cuenta local es `leo` y el árbol existe en `/Users/leo/projects`.
-- La Mac mini ya tiene la cuenta humana `jarvis` y conectividad LAN o Tailscale.
-- Tené la clave pública de `jarvis` disponible como un archivo local; nunca copies claves privadas, contraseñas SMB ni tokens al repositorio.
+- La Mac mini ya tiene su cuenta existente `leo` y conectividad LAN o Tailscale; esta guía no crea ni modifica cuentas.
+- Tené la clave pública de `leo` de la Mac mini disponible como un archivo local; nunca copies claves privadas, contraseñas SMB ni tokens al repositorio.
 
 ```sh
 whoami                         # debe imprimir leo
@@ -57,7 +57,7 @@ chmod 600 ~/.ssh/agent-fabric-macbook-to-mac-mini
 chmod 644 ~/.ssh/agent-fabric-macbook-to-mac-mini.pub
 ```
 
-Entregá **sólo** `~/.ssh/agent-fabric-macbook-to-mac-mini.pub` a `jarvis` por un canal que puedas verificar. Recibí a cambio su clave pública y guardala, por ejemplo, en `~/Downloads/agent-fabric-mac-mini-to-macbook.pub`; no la agregues al repositorio.
+Entregá **sólo** `~/.ssh/agent-fabric-macbook-to-mac-mini.pub` a `leo` en la Mac mini por un canal que puedas verificar. El mismo nombre de usuario en ambos hosts no comparte HOME ni credenciales. Recibí a cambio su clave pública y guardala, por ejemplo, en `~/Downloads/agent-fabric-mac-mini-to-macbook.pub`; no la agregues al repositorio.
 
 No sobrescribas `~/.ssh/config`. Fusioná manualmente el contenido de `config/macbook/ssh_config.template` con la configuración existente, conservando el alias `agent-fabric-mac-mini`; o guardá la plantilla como un archivo dedicado, por ejemplo `~/.ssh/config.d/agent-fabric.conf`, y agregá una sola directiva `Include ~/.ssh/config.d/*.conf` a tu configuración existente. Reemplazá `<MAC_MINI_LAN_OR_TAILSCALE_ENDPOINT>` por una dirección LAN alcanzable o el nombre/IP Tailscale real de la Mac mini, y verificá su fingerprint al primer contacto. No inventes un hostname para la Mac mini. La plantilla fuerza `BatchMode`, `IdentitiesOnly`, host key estricto, sin forwarding y sin PTY.
 

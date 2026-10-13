@@ -34,13 +34,13 @@ class InstallRuntimeTests(unittest.TestCase):
             f'restrict,command="{home}/.local/agent-fabric/bin/fabric-runner --config {home}/.local/agent-fabric/config/host.json" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest peer',
         )
 
-    def test_apply_installs_only_runtime_files_under_home_and_revert_removes_them(self):
+    def test_mac_mini_apply_accepts_leo_and_installs_only_runtime_files_under_home(self):
         installer = module()
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory) / 'home'
             key = Path(directory) / 'peer.pub'
             key.write_text('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest peer\n', encoding='utf-8')
-            with patch.object(installer, 'effective_user', return_value='jarvis'):
+            with patch.object(installer, 'effective_user', return_value='leo'):
                 result = installer.apply(ROOT, home, 'mac-mini', key)
             runtime = home / '.local/agent-fabric'
             self.assertEqual(result['runtime_root'], str(runtime))
@@ -51,9 +51,21 @@ class InstallRuntimeTests(unittest.TestCase):
             self.assertTrue((runtime / 'lib/ssh_policy.py').is_file())
             config = json.loads((runtime / 'config/host.json').read_text(encoding='utf-8'))
             self.assertEqual(config['role'], 'mac-mini')
+            self.assertEqual(config['expected_user'], 'leo')
             self.assertTrue(os.access(runtime / 'bin/fabric-runner', os.X_OK))
             self.assertEqual(installer.revert(home), {'reverted': True})
             self.assertFalse(runtime.exists())
+
+    def test_mac_mini_apply_rejects_wrong_user_without_writing(self):
+        installer = module()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / 'home'
+            key = Path(directory) / 'peer.pub'
+            key.write_text('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest peer\n', encoding='utf-8')
+            with patch.object(installer, 'effective_user', return_value='jarvis'):
+                with self.assertRaisesRegex(ValueError, 'UNEXPECTED_USER'):
+                    installer.apply(ROOT, home, 'mac-mini', key)
+            self.assertFalse(home.exists())
 
     def test_apply_rejects_user_that_does_not_match_role_without_writing(self):
         installer = module()

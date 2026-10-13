@@ -9,7 +9,7 @@ from pathlib import Path
 from ssh_policy import authorized_keys_line
 
 HOSTS = {'macbook': 'macbook', 'mac-mini': 'mac-mini'}
-ROLE_USERS = {'macbook': 'leo', 'mac-mini': 'jarvis'}
+ROLE_USERS = {'macbook': 'leo', 'mac-mini': 'leo'}
 RUNTIME_RELATIVE = Path('.local/agent-fabric')
 FILES = (
     ('bin/fabric-runner', 'bin/fabric-runner'),
