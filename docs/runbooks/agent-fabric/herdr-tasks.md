@@ -20,7 +20,7 @@ El llamador siempre es un agente en el Mac de origen (por ejemplo, en el MacBook
 ssh leo@MacMiniLeo.local 'PATH=/opt/homebrew/bin:$HOME/.nvm/versions/node/v24.19.0/bin:/usr/bin:/bin python3 /Volumes/agent-projects/leo/mac-agent-fabric/automation/agent-fabric/bin/fabric-herdr-task submit --project-root /Volumes/agent-projects' < envelope.json
 ```
 
-Después invoca `recover <task_id>` hasta obtener el resultado final y, por último, `close <task_id>`. Si uno de los Macs está apagado, este canal simplemente no se usa y se emplean subagentes locales. Esta forma de invocación no instala una copia fija en el mini ni configura un disparador autónomo.
+Después invoca `recover <task_id>` hasta obtener el resultado final y, por último, `close <task_id>`. `recover` espera y consulta cada 2 segundos durante 120 s de forma predeterminada; use `--wait SEGUNDOS` (0–900) para ajustarlo, o `--wait 0` para una sola lectura. Si uno de los Macs está apagado, este canal simplemente no se usa y se emplean subagentes locales. Esta forma de invocación no instala una copia fija en el mini ni configura un disparador autónomo.
 
 ## Uso rápido
 
@@ -54,7 +54,11 @@ El prompt se envía sin `--wait` ni `--timeout`, porque Herdr rechaza `--timeout
 
 Herdr puede devolver errores tipados tanto por stdout como por stderr. Tras cerrar, `recover` y `close` devuelven el resultado almacenado, leído de la sesión retenida.
 
-La respuesta final incluye `task_id`, `status`, `resubmit: false` y, cuando existe, `resulttext`, `userentry` y `assistantentry`.
+La respuesta final incluye `task_id`, `status`, `resubmit: false` y, cuando existe, `resulttext`, `userentry` y `assistantentry`. Un informe válido (incluso `pending`, `unknown` o `timed_out`) sale con código 0; una entrada inválida o fallo sale con código 2.
+
+## Errores y cortes
+
+Para el agente llamador se recomiendan las opciones SSH `-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4`. Una salida SSH 255 significa que la conexión falló y el estado de la tarea es desconocido desde el llamador. La alternativa segura es ejecutar más tarde `recover <task_id>`, o repetir `submit` con el sobre **IDÉNTICO**: es idempotente y nunca vuelve a enviar el prompt. Nunca cree un `task_id` nuevo para el mismo trabajo después de un fallo ambiguo. `recover` espera 120 s por defecto; ajuste ese límite con `--wait`.
 
 ## Verificación local
 

@@ -30,7 +30,7 @@ User authorized implementing automatic per-task Pi dispatch through Herdr, corre
 - [ ] T4. Probar el modo RPC de Pi. Ruta: TBD. Evidencia: pendiente.
 - [ ] T5. Probar el transporte de retorno mini → MacBook. Estado actual: el puerto 22 del MacBook está abierto y el mini lo alcanza, pero el mini no tiene entrada `known_hosts` para `MacBookLeo.local` ni clave privada; requiere verificación humana de la huella y una clave autorizada en el MacBook. Ruta: TBD. Evidencia: pendiente.
 - [ ] T6. Probar dos tareas concurrentes. Ruta: TBD. Evidencia: pendiente.
-- [ ] T7. Añadir timeout predeterminado y manejo ordinario de errores para `recover`/`submit`. Ruta: TBD. Evidencia: pendiente.
+- [x] T7. Añadir timeout predeterminado y manejo ordinario de errores para `recover`/`submit`. Ruta: implementación local (CLI/controlador/pruebas/documentación). Evidencia: RED `python3 -m unittest automation/agent-fabric/test/test_herdr_task.py automation/agent-fabric/test/test_herdr_task_cli.py` observó 19 pruebas, 4 errores esperados (sin `wait_recover` ni `--wait`); GREEN del mismo comando: 21 pruebas PASS. Suite completa `python3 -m unittest discover -s automation/agent-fabric/test`: 77 pruebas PASS; smoke Python 3.9 de módulos de lib y `git diff --check`: PASS.
 
 ## Checks and delivery
 

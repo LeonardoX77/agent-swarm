@@ -17,8 +17,15 @@ def main():
     parser.add_argument('--project-root')
     parser.add_argument('--herdr')
     parser.add_argument('--timeout', type=int, default=30)
+    parser.add_argument('--wait', default='120')
     args = parser.parse_args()
     try:
+        try:
+            wait = int(args.wait)
+        except (TypeError, ValueError) as error:
+            raise TaskError('INVALID_WAIT') from error
+        if not 0 <= wait <= 900:
+            raise TaskError('INVALID_WAIT')
         controller = Controller(args.state_dir, herdr=args.herdr, project_root=args.project_root, timeout=args.timeout)
         if args.action == 'submit':
             if args.task_id is not None:
@@ -30,13 +37,16 @@ def main():
         elif not args.task_id:
             raise TaskError('MISSING_TASK_ID')
         elif args.action == 'recover':
-            result = controller.recover(args.task_id)
+            result = controller.wait_recover(args.task_id, wait)
         else:
             result = controller.close(args.task_id)
         print(json.dumps(result, sort_keys=True))
-        return 0
+        return 130 if result.get('interrupted') else 0
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         print(json.dumps({'status': 'failed', 'diagnostic_code': str(error) or 'INVALID_INPUT'}, sort_keys=True))
+        return 2
+    except Exception as error:
+        print(json.dumps({'status': 'failed', 'diagnostic_code': 'UNEXPECTED_ERROR:' + type(error).__name__}, sort_keys=True))
         return 2
 
 

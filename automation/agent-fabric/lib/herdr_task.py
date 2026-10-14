@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import time
 from datetime import datetime, timezone
 import stat
 import subprocess
@@ -283,6 +284,25 @@ class Controller:
         if 'agent' in accepted and not self._identity(record, {'result': {'agent': accepted['agent']}}):
             return self._unknown(envelope['task_id'], 'submit_intent')
         return self._report(self.ledger.update(envelope['task_id'], 'submitted', 'submit_intent'))
+
+    def wait_recover(self, task, wait=120, *, clock=time.monotonic, sleep=time.sleep):
+        if not isinstance(wait, int) or isinstance(wait, bool) or not 0 <= wait <= 900:
+            raise TaskError('INVALID_WAIT')
+        deadline = clock() + wait
+        report = self.recover(task)
+        if wait == 0:
+            return report
+        while report['status'] not in ('done', 'closed', 'unknown') and not (
+                report['status'] == 'cleanup_intent' and 'resulttext' in report):
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return {**report, 'timed_out': True}
+            try:
+                sleep(min(2, remaining))
+            except KeyboardInterrupt:
+                return {**report, 'interrupted': True}
+            report = self.recover(task)
+        return report
 
     def recover(self, task):
         task = _uuid(task); record = self.ledger.load(task)
