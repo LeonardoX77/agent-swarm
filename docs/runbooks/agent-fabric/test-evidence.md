@@ -130,7 +130,7 @@ Experimento aislado en `/Users/beatrizdelcampo/tmp`, sin instalar software, rein
 | Herdr y JSONL de sesión de Pi | Adaptador `fabric-herdr-task`: envía por Herdr y lee el JSONL de la sesión propia. | PASS extremo a extremo; la evidencia de la ejecución en vivo se resume a continuación. |
 | Claude directo en Herdr con `dontAsk` | Claude se ejecuta en Herdr con el modo de permisos indicado. | Parcial; el usuario lo difirió. |
 | Gentle Pi `orchestrator_send_message` | Sockets Unix del perfil local. | No es cross-host: sólo funciona localmente. |
-| Modo RPC de Pi | `pi --mode rpc`, JSONL por stdin/stdout. | Sólo estudiado; queda pendiente una prueba solicitada por el usuario. |
+| Modo RPC de Pi | `pi --mode rpc`, JSONL por stdin/stdout. | Probado por SSH en la Mac mini (Pi 1.0.2, `--no-session`). El protocolo funciona: `{"id","type":"prompt","message"}` devuelve `response` con el mismo `id` y `disposition: started`; el turno emite `message_end` (mensaje definitivo) y termina en `agent_settled`; cerrar stdin termina el proceso con código 0. No hubo respuesta útil: con el proveedor por defecto `claude-bridge` devuelve `Not logged in` (misma causa que `pi -p` por SSH); con OpenAI, `gpt-4.1-nano` y `gpt-5.3-codex` devuelven 400 porque la credencial es de cuenta ChatGPT/Codex. Contexto entre prompts sin verificar. Los eventos no llevan el `id` del comando: con prompts superpuestos hay que serializarlos. RPC no resuelve la autenticación; por SSH sólo sirve con un proveedor autenticado por archivo. |
 
 ## Historial E2E en vivo del adaptador
 
