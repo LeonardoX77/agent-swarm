@@ -20,7 +20,7 @@ El llamador siempre es un agente en el Mac de origen (por ejemplo, en el MacBook
 ssh leo@MacMiniLeo.local 'PATH=/opt/homebrew/bin:$HOME/.nvm/versions/node/v24.19.0/bin:/usr/bin:/bin python3 /Volumes/agent-projects/leo/mac-agent-fabric/automation/agent-fabric/bin/fabric-herdr-task submit --project-root /Volumes/agent-projects' < envelope.json
 ```
 
-Después invoca `recover <task_id>` hasta obtener el resultado final y, por último, `close <task_id>`. `recover` espera y consulta cada 2 segundos durante 120 s de forma predeterminada; use `--wait SEGUNDOS` (0–900) para ajustarlo, o `--wait 0` para una sola lectura. Si uno de los Macs está apagado, este canal simplemente no se usa y se emplean subagentes locales. Esta forma de invocación no instala una copia fija en el mini ni configura un disparador autónomo.
+Después invoca `recover <task_id>` hasta obtener el resultado final y, por último, `close <task_id>`. `recover` espera y consulta cada 2 segundos durante 120 s de forma predeterminada; use `--wait SEGUNDOS` (0–900) para ajustarlo, o `--wait 0` para una sola lectura. Si uno de los Macs está apagado, este canal simplemente no se usa y se emplean subagentes locales. Esta forma de invocación no instala una copia fija en el mini ni configura un disparador autónomo. El procedimiento del canal de retorno está en [Transporte de retorno: Mac mini → MacBook](return-transport.md). Para montar el recurso SMB de proyectos de forma controlada, consulte [Montaje SMB entre equipos](smb-mount.md).
 
 ## Uso rápido
 
