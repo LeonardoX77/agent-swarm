@@ -87,6 +87,7 @@ class SetupTests(unittest.TestCase):
 
     def test_fingerprint_option_continues_to_authorization_wait(self):
         setup = self.make(host_fingerprint="SHA256:ok")
+        key = setup.home / ".ssh/agent_fabric_new_mac"; key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("ssh-ed25519 public")
         setup.command = lambda argv, **kw: Result(1 if argv[:1] == ["ssh"] else 0, "256 SHA256:ok host")
         with self.assertRaises(Waiting): setup.ssh_to_new()
 

@@ -33,6 +33,8 @@ class FakeMacs:
         self.mounted = self.reverse_alias = self.update_installed = False
         self.update_calls, self.nonces = [], []
         self.nonce_mismatch = False
+        self.require_authorized_key = self.nvm_only_pi = False
+        self.remote_commands = []
 
     def close(self):
         self.origin.cleanup()
@@ -56,12 +58,26 @@ class FakeMacs:
         return Result(result.returncode, result.stdout, result.stderr)
 
     def _remote(self, command, program):
+        self.remote_commands.append(command)
+        path_prefix = ""
+        if command.startswith("PATH="):
+            path_prefix, command = command.split(" ", 1)
+            path_prefix = path_prefix[5:]
+        if command.startswith("# agent-fabric-path"):
+            result = subprocess.run(["/bin/sh", "-c", command], text=True, capture_output=True,
+                                    env=dict(os.environ, HOME=str(self.remote_home)))
+            return Result(result.returncode, result.stdout, result.stderr)
         if command == 'printf %s "$HOME"': return Result(out=str(self.remote_home))
         if command == "true": return Result(0 if self.authorization_polls >= self.authorized_after else 1)
         if command.startswith("command -v "):
             name = command.split()[-1]
+            nvm_bin = str(self.remote_home / ".nvm/versions/node/v24.19.0/bin")
+            if name == "pi" and self.nvm_only_pi:
+                return Result(out=nvm_bin + "/pi\n") if nvm_bin in path_prefix.split(":") else Result(1)
             return Result(out="/opt/fake/bin/%s\n" % name) if name in self.tools else Result(1)
-        if command == "pi list 2>/dev/null | grep -F gentle-pi": return Result(0 if "gentle-pi" in self.tools else 1, "gentle-pi\n")
+        if command == "pi list 2>/dev/null | grep -F gentle-pi":
+            available = "gentle-pi" in self.tools and (not self.nvm_only_pi or str(self.remote_home / ".nvm/versions/node/v24.19.0/bin") in path_prefix.split(":"))
+            return Result(0 if available else 1, "gentle-pi\n")
         if command == "herdr tab list": return Result()
         if command == "scutil --get LocalHostName": return Result(out="Bea\n")
         if command.startswith("ssh -o BatchMode=yes fabric-origin true"):
@@ -76,7 +92,7 @@ class FakeMacs:
             return Result()
         if command.startswith("cat "):
             return Result(out=Path(shlex.split(command)[1]).read_text())
-        if command.startswith("python3 - "):
+        if command.startswith("python3 -") or command.startswith("/usr/bin/python3 -"):
             result = self._remote_python(command, program)
             if "Host fabric-origin" in command: self.reverse_alias = True
             return result
@@ -121,6 +137,9 @@ class FakeMacs:
             return Result(0 if self.authorization_polls >= self.authorized_after else 1)
         if argv[:1] == ["ssh"] and "bea@Bea.local" in text:
             self.authorization_polls += 1
+            if self.require_authorized_key:
+                authorized = self.remote_home / ".ssh/authorized_keys"
+                return Result(0 if authorized.exists() and "no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 ORIGINKEY public" in authorized.read_text() else 1)
             return Result(0 if self.authorization_polls >= self.authorized_after else 1)
         if argv[:1] == ["ssh-keygen"] and "-lf" in argv:
             return Result(out="256 SHA256:NEWFP new\n" if "-" in argv else "256 SHA256:ORIGINFP origin\n")
@@ -194,6 +213,41 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertEqual(len(machines.update_calls), 1)
         self.assertIn("install --hour 04 --minute 30", machines.update_calls[0])
         self.assertTrue(setup.log_path.exists())
+
+    def test_authorization_instruction_is_executable_and_restricted(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.require_authorized_key = True
+        setup, _ = self.make_setup(machines)
+        messages = []
+        def wait_for_person(message, condition):
+            messages.append(message); setup.emit(message)
+            command = next(line for line in message.splitlines() if line.startswith("mkdir -p ~/.ssh"))
+            result = subprocess.run(["/bin/sh", "-c", command], text=True, capture_output=True,
+                                    env=dict(os.environ, HOME=str(machines.remote_home)))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(condition())
+        setup.wait_for = wait_for_person
+
+        self.assertEqual(setup.ssh_to_new()[0], "changed")
+        message = messages[0]
+        public_line = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 ORIGINKEY public"
+        self.assertIn(public_line, message)
+        self.assertIn(public_line, setup.output.getvalue())
+        self.assertIn(public_line, setup.log_path.read_text())
+        self.assertEqual((machines.remote_home / ".ssh/authorized_keys").read_text().count(public_line), 1)
+
+    def test_nvm_default_path_is_discovered_for_runtimes_and_registry(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.nvm_only_pi = True; machines.tools.remove("pi")
+        nvm_bin = machines.remote_home / ".nvm/versions/node/v24.19.0/bin"
+        nvm_bin.mkdir(parents=True); (machines.remote_home / ".nvm/alias").mkdir(parents=True)
+        (machines.remote_home / ".nvm/alias/default").write_text("v24.19.0\n")
+        setup, registry_path = self.make_setup(machines)
+
+        self.assertEqual(machines._remote("command -v pi", "").returncode, 1)
+        self.assertEqual(setup.run(), 0, setup.output.getvalue())
+        self.assertIn(str(nvm_bin), HostRegistry(registry_path).get("bea")["path"])
+        self.assertTrue(any(command.startswith("PATH=") and "command -v pi" in command for command in machines.remote_commands))
 
     def test_rerun_on_configured_host_writes_nothing(self):
         machines, first, registry_path = self.run_zero_to_done()

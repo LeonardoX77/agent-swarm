@@ -104,10 +104,48 @@ class Setup:
     def remote(self, command, timeout=60, input=None):
         return self.command(["ssh", "fabric-" + self.name, command], timeout, input)
 
+    def tool_command(self, command):
+        return "PATH=%s %s" % (self.remote_path, command) if getattr(self, "remote_path", None) else command
+
+    def remote_tool(self, command, timeout=60, input=None):
+        return self.remote(self.tool_command(command), timeout, input)
+
     def remote_python(self, program, args=()):
         """Run a reviewed Python 3.9 program remotely; values are JSON argv, never shell code."""
         command = "python3 - " + " ".join(shlex.quote(json.dumps(x)) for x in args)
-        return self.remote(command, 60, program)
+        return self.remote_tool(command, 60, program)
+
+    def discover_remote_path(self):
+        """Find user-tool directories without relying on an interactive shell profile."""
+        program = """# agent-fabric-path
+paths=''
+add_path() { [ -d "$1" ] && paths="${paths:+$paths:}$1"; }
+add_path /opt/homebrew/bin
+add_path /usr/local/bin
+nvm="$HOME/.nvm"; nvm_bin=''
+if [ -f "$nvm/alias/default" ]; then
+ version=$(tr -d '\\n' < "$nvm/alias/default")
+ [ -d "$nvm/versions/node/$version/bin" ] && nvm_bin="$nvm/versions/node/$version/bin"
+fi
+if [ -z "$nvm_bin" ]; then
+ best=''
+ for candidate in "$nvm"/versions/node/*/bin; do
+  [ -d "$candidate" ] || continue
+  version=${candidate%/bin}; version=${version##*/}; version=${version#v}
+  key=$(printf '%s' "$version" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
+  if [ -z "$best" ] || [ "$key" \> "$best" ]; then best="$key"; nvm_bin="$candidate"; fi
+ done
+fi
+[ -n "$nvm_bin" ] && add_path "$nvm_bin"
+add_path "$HOME/.hermes/node/bin"
+add_path "$HOME/.local/bin"
+printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
+"""
+        result = self.remote(program)
+        path = result.stdout.strip()
+        if result.returncode or not path: raise SetupError("Could not discover remote PATH")
+        self.remote_path = path; self.state["remote_path"] = path
+        return path
 
     def remote_home_path(self, suffix=""):
         if self.remote_home is None:
@@ -206,17 +244,21 @@ class Setup:
             with known.open("a", encoding="utf-8") as target: target.write(("" if not prior or prior.endswith("\n") else "\n") + "\n".join(missing_lines) + "\n")
             os.chmod(str(known), 0o600); changed = True
         public = key.with_suffix(".pub")
-        instruction = "On %s add the displayed public key to ~/.ssh/authorized_keys, then continue." % self.name
+        try: line = RESTRICTIONS + public.read_text(encoding="utf-8").strip()
+        except OSError: raise SetupError("Could not read SSH public key")
+        authorization = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && { touch ~/.ssh/authorized_keys && grep -qxF %s ~/.ssh/authorized_keys || printf '%%s\\n' %s >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys" % (shlex.quote(line), shlex.quote(line))
+        instruction = "On %s run this exact command, then continue:\n%s" % (self.name, authorization)
         self.wait_for(instruction, lambda: self.command(["ssh", "-i", str(key), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", self.user + "@" + self.address, "true"]).returncode == 0)
         changed = self.write_alias(self.home / ".ssh/config", "fabric-" + self.name, self.address, self.user, str(key)) or changed
         return self.result("changed" if changed else "ok", "configured SSH channel" if changed else "SSH alias already configured")
 
     def runtimes(self):
+        self.discover_remote_path()
         probes = {"brew": "command -v brew", "herdr": "command -v herdr", "node": "command -v node", "pi": "command -v pi", "python3": "command -v python3", "gentle-pi": "pi list 2>/dev/null | grep -F gentle-pi", "herdr-server": "herdr tab list"}
-        def missing(): return [n for n, command in probes.items() if self.remote(command).returncode != 0]
+        def missing(): return [n for n, command in probes.items() if self.remote_tool(command).returncode != 0]
         absent = missing(); changed = []
-        if self.install_missing and "herdr" in absent and "brew" not in absent and self.remote("brew install herdr", 1200).returncode == 0: changed.append("installed herdr")
-        if self.install_missing and "gentle-pi" in absent and "pi" not in absent and self.remote("pi install npm:gentle-pi", 600).returncode == 0: changed.append("installed gentle-pi")
+        if self.install_missing and "herdr" in absent and "brew" not in absent and self.remote_tool("brew install herdr", 1200).returncode == 0: changed.append("installed herdr")
+        if self.install_missing and "gentle-pi" in absent and "pi" not in absent and self.remote_tool("pi install npm:gentle-pi", 600).returncode == 0: changed.append("installed gentle-pi")
         if missing(): self.wait_for("On %s: install missing runtimes and log Pi in once from the GUI" % self.name, lambda: not missing())
         return self.result("changed" if changed else "ok", ", ".join(changed) or "required runtimes available")
 
@@ -226,7 +268,7 @@ class Setup:
         temporary = destination + ".fabric-setup-%s.tmp" % int(self.clock())
         if self.command(["scp", str(source), "fabric-" + self.name + ":" + temporary], 120).returncode: raise SetupError("Could not copy " + str(source))
         command = "mkdir -p %s && chmod %s %s && mv %s %s" % tuple([shlex.quote(str(Path(destination).parent)), mode, shlex.quote(temporary), shlex.quote(temporary), shlex.quote(destination)])
-        if self.remote(command).returncode: raise SetupError("Could not install remote file " + destination)
+        if self.remote_tool(command).returncode: raise SetupError("Could not install remote file " + destination)
 
     def ssh_to_origin(self):
         if self.remote("ssh -o BatchMode=yes fabric-%s true" % self.origin["name"]).returncode == 0: return self.result("ok", "reverse SSH already configured")
@@ -273,22 +315,22 @@ if not m:
         if self.role != "spoke": return self.result("skipped", "skipped for hub role")
         share = self.registry.share; vals = tuple(shlex.quote(share[x]) for x in ("host", "name", "user")); tool = self.remote_home_path("/.local/agent-fabric/bin/fabric-smb-mount")
         check = "%s status --host %s --share %s --user %s" % ((shlex.quote(tool),) + vals)
-        if self.remote(check).returncode == 0 and '"mounted": true' in self.remote(check).stdout.lower(): return self.result("ok", "catalog already mounted")
+        if self.remote_tool(check).returncode == 0 and '"mounted": true' in self.remote_tool(check).stdout.lower(): return self.result("ok", "catalog already mounted")
         if self.dry_run: return self.result("changed", "would install persistent SMB mount")
         self._remote_copy(Path(__file__).resolve().parents[3] / "automation/agent-fabric/bin/fabric-smb-mount", "~/.local/agent-fabric/bin/fabric-smb-mount")
         command = "%s mount --host %s --share %s --user %s --persistent" % ((shlex.quote(tool),) + vals)
-        if self.remote(command, 120).returncode:
-            self.wait_for("On %s, connect in Finder to smb://%s@%s/%s and save the password" % (self.name, share["user"], share["host"], share["name"]), lambda: self.remote(check).returncode == 0 and '"mounted": true' in self.remote(check).stdout.lower())
-        if self.remote("test -d " + shlex.quote("/Volumes/" + share["name"])).returncode: raise SetupError("Catalog is not visible after mount")
+        if self.remote_tool(command, 120).returncode:
+            self.wait_for("On %s, connect in Finder to smb://%s@%s/%s and save the password" % (self.name, share["user"], share["host"], share["name"]), lambda: self.remote_tool(check).returncode == 0 and '"mounted": true' in self.remote_tool(check).stdout.lower())
+        if self.remote_tool("test -d " + shlex.quote("/Volumes/" + share["name"])).returncode: raise SetupError("Catalog is not visible after mount")
         return self.result("changed", "mounted catalog")
 
     def remote_facts(self):
-        hostname = self.remote("scutil --get LocalHostName").stdout.strip(); paths = []
+        hostname = self.remote_tool("scutil --get LocalHostName").stdout.strip(); paths = []
         for tool in ("pi", "herdr", "python3"):
-            value = self.remote("command -v " + tool).stdout.strip()
+            value = self.remote_tool("command -v " + tool).stdout.strip()
             if not value: raise SetupError("Remote tool missing: " + tool)
             paths.append(str(Path(value).parent))
-        return {"hostname_prefix": hostname, "path": ":".join(dict.fromkeys(paths + ["/usr/bin", "/bin"])), "claude": self.remote("command -v claude").returncode == 0}
+        return {"hostname_prefix": hostname, "path": self.remote_path, "claude": self.remote_tool("command -v claude").returncode == 0}
 
     def build_registry_entry(self):
         facts = self.remote_facts(); root = self.origin["catalog_root"]; relative = os.path.relpath(self.origin["repo"], root); catalog = "/Volumes/" + self.registry.share["name"] if self.role == "spoke" else root
@@ -298,7 +340,7 @@ if not m:
         entry = self.build_registry_entry(); self.generated_registry_entry = entry; existing = self.registry.hosts.get(self.name)
         if existing and {k:v for k,v in existing.items() if k != "name"} == entry: return self.result("ok", "registry entry already configured")
         if self.dry_run: return self.result("changed", "would update registry entry")
-        if self.remote("mkdir -p " + shlex.quote(entry["gui_cwd"])).returncode: raise SetupError("Could not create remote GUI directory")
+        if self.remote_tool("mkdir -p " + shlex.quote(entry["gui_cwd"])).returncode: raise SetupError("Could not create remote GUI directory")
         raw = json.loads(self.registry.path.read_text(encoding="utf-8")); raw["hosts"][self.name] = entry; temporary = self.registry.path.with_name("." + self.registry.path.name + ".fabric-setup.tmp")
         temporary.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
         try: HostRegistry(temporary)
@@ -314,6 +356,9 @@ if not m:
         return digest.hexdigest()
 
     def skill(self):
+        if self.dry_run:
+            configured = self.state["phases"].get("skill", {}).get("status") in ("ok", "changed") and "registry" not in self.changed
+            return self.result("ok" if configured else "changed", "skill and bootstrap already configured" if configured else "would copy skill and bootstrap")
         repository = Path(__file__).resolve().parents[3]; source = repository / "skills/agent-fabric-remote"; source_hash = self.canonical_digest(source)
         remote_program = """import hashlib,json,pathlib,sys
 r=pathlib.Path(json.loads(sys.argv[1])); h=hashlib.sha256()
@@ -332,12 +377,12 @@ print(h.hexdigest())
                 if self.dry_run: changed.append("would copy %s skill" % runtime)
                 else:
                     backup = self.remote_home_path("/.local/state/agent-fabric/skill-backups/%s-agent-fabric-remote-%s" % (runtime, int(self.clock())))
-                    if self.remote("test ! -e %s || { mkdir -p %s && mv %s %s; }" % tuple(shlex.quote(x) for x in (destination, str(Path(backup).parent), destination, backup))).returncode: raise SetupError("Could not back up skill")
+                    if self.remote_tool("test ! -e %s || { mkdir -p %s && mv %s %s; }" % tuple(shlex.quote(x) for x in (destination, str(Path(backup).parent), destination, backup))).returncode: raise SetupError("Could not back up skill")
                     archive = self.home / (".local/state/agent-fabric/setup/skill-%s.tar" % runtime); archive.parent.mkdir(parents=True, exist_ok=True)
                     if self.command(["tar", "-cf", str(archive), "-C", str(source.parent), source.name]).returncode: raise SetupError("Could not package skill")
                     staged = "~/.local/state/agent-fabric/setup/" + archive.name; self._remote_copy(archive, staged, "600")
                     stage = self.remote_home_path("/.local/state/agent-fabric/setup")
-                    if self.remote("mkdir -p %s && tar -xf %s -C %s" % tuple(shlex.quote(x) for x in (str(Path(destination).parent), stage + "/" + archive.name, str(Path(destination).parent)))).returncode: raise SetupError("Could not install skill")
+                    if self.remote_tool("mkdir -p %s && tar -xf %s -C %s" % tuple(shlex.quote(x) for x in (str(Path(destination).parent), stage + "/" + archive.name, str(Path(destination).parent)))).returncode: raise SetupError("Could not install skill")
                     changed.append("copied %s skill" % runtime)
             if self.dry_run: continue
             block = (source / "assets/bootstrap-block.md").read_text(encoding="utf-8").replace("<REPO_PATH>", target["repo"]).rstrip() + "\n"
@@ -357,11 +402,11 @@ if n!=s:
 
     def auto_update_phase(self):
         if not self.auto_update: return self.result("skipped", "skipped by --no-auto-update")
-        hour, minute = self.update_time.split(":"); executable = self.remote_home_path("/.local/agent-fabric/bin/fabric-update"); status = self.remote(shlex.quote(executable) + " status")
+        hour, minute = self.update_time.split(":"); executable = self.remote_home_path("/.local/agent-fabric/bin/fabric-update"); status = self.remote_tool(shlex.quote(executable) + " status")
         if status.returncode == 0 and ('"hour": %d' % int(hour)) in status.stdout and ('"minute": %d' % int(minute)) in status.stdout and '"loaded": true' in status.stdout.lower(): return self.result("ok", "daily update already configured")
         if self.dry_run: return self.result("changed", "would install daily update at " + self.update_time)
         self._remote_copy(Path(__file__).resolve().parents[3] / "automation/agent-fabric/bin/fabric-update", "~/.local/agent-fabric/bin/fabric-update")
-        if self.remote(shlex.quote(executable) + " install --hour %s --minute %s" % (hour, minute), 120).returncode: raise SetupError("Could not install auto-update")
+        if self.remote_tool(shlex.quote(executable) + " install --hour %s --minute %s" % (hour, minute), 120).returncode: raise SetupError("Could not install auto-update")
         return self.result("changed", "installed daily update at " + self.update_time)
 
     def acceptance(self):
@@ -371,14 +416,14 @@ if n!=s:
         local = Path(__file__).resolve().parents[3] / "automation/agent-fabric/bin/fabric-delegate"
         if self.command([str(local), "preflight", self.name]).returncode: raise SetupError("Origin preflight failed")
         remote_delegate = self.registry.get(self.name)["repo"] + "/automation/agent-fabric/bin/fabric-delegate"
-        if self.remote(shlex.quote(remote_delegate) + " preflight " + shlex.quote(self.origin["name"])).returncode: raise SetupError("Remote preflight failed")
+        if self.remote_tool(shlex.quote(remote_delegate) + " preflight " + shlex.quote(self.origin["name"])).returncode: raise SetupError("Remote preflight failed")
         if self.skip_live or (self.state["phases"].get("acceptance", {}).get("status") == "ok" and not self.changed): return self.result("skipped", "live acceptance skipped")
         # Delegates own task lifecycle; reject every response that does not return the nonce.
         directions = (
             (self.name, [str(local), "submit", self.name], [str(local), "recover", self.name], [str(local), "close", self.name]),
-            (self.origin["name"], ["ssh", "fabric-" + self.name, shlex.quote(remote_delegate) + " submit " + shlex.quote(self.origin["name"])],
-             ["ssh", "fabric-" + self.name, shlex.quote(remote_delegate) + " recover " + shlex.quote(self.origin["name"])],
-             ["ssh", "fabric-" + self.name, shlex.quote(remote_delegate) + " close " + shlex.quote(self.origin["name"])]),
+            (self.origin["name"], ["ssh", "fabric-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " submit " + shlex.quote(self.origin["name"]))],
+             ["ssh", "fabric-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " recover " + shlex.quote(self.origin["name"]))],
+             ["ssh", "fabric-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " close " + shlex.quote(self.origin["name"]))]),
         )
         for target, submit, recover, close in directions:
             nonce, task_id = "ACCEPT_" + uuid.uuid4().hex, str(uuid.uuid4()); envelope = json.dumps({"task_id": task_id, "goal": "Reply with exactly %s and nothing else." % nonce})
