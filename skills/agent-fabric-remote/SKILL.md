@@ -1,76 +1,66 @@
 ---
 name: agent-fabric-remote
-description: "Trigger: Agent Fabric task envelope, delegate, send or run work on the other Mac, Mac mini, MacBook, remote Pi. Safely receive or delegate bounded Agent Fabric work."
+description: "Trigger: Agent Fabric task envelope, delegate, send or run work on the other Mac, remote Pi, or a registered Mac. Safely receive or delegate bounded Agent Fabric work."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## Activation Contract
 
-Activate only when (1) a request contains an explicit Agent Fabric task envelope with non-empty `task_id`, `origin_host`, `goal`, `project`, and `acceptance`, plus `mode: executor` or `mode: orchestrator`; or (2) the user explicitly asks to delegate work to the other Mac. Otherwise behave normally.
+Activate only for an explicit Agent Fabric task envelope with non-empty `task_id`, `origin_host`, `project`, `goal`, `acceptance`, and `mode`, or when the user explicitly asks to delegate work to the other Mac, remote Pi, or a registered Mac. Otherwise behave normally.
 
 ## Hard Rules
 
-- Run `hostname` first. Receiving work: `MacMiniLeo*` uses `/Volumes/agent-projects`; `MacBookLeo*` uses `/Users/leo/projects`. Resolve `project` only below that root; on the mini never use `/Users/leo/projects`; any other hostname: stop and report.
-- This skill is behavioral guidance, not a sandbox; SMB-share scope and OS permissions impose access limits. Never use `/Volumes/Macintosh HD-1` or another broad mount. If the project mount/path is absent, stop and report; never guess a path. Read before writing, stay within the resolved project, goal, and acceptance, and do not disclose secrets.
-- Respect permission prompts; never bypass or self-approve them. A pending approval is `blocked`, never success.
-- For delegation, create one UUID `task_id` once per piece of work. Never create another for that work after ambiguity; the same envelope is idempotent.
-
-## Decision Gates
-
-| Situation | Action |
-| --- | --- |
-| Invalid/missing envelope; no explicit delegation request | Behave normally. |
-| Project mount/path unavailable | Stop with `blocked` and the observed path condition. |
-| Receiving `executor` envelope | Perform bounded local work and collect sanitized evidence. |
-| Receiving `orchestrator` envelope | Delegate only through a verified configured transport; otherwise query state or report the required local work. |
-| Delegation request | Use the target, preflight, envelope, and lifecycle below. |
-| SSH exits 255 / target unreachable | Tell the user the other Mac is off or unreachable; use local subagents instead. Never disable host-key checking. |
+- Find `<repo>` in the Agent Fabric bootstrap in startup instructions: `Agent Fabric repository on this host: <REPO_PATH>`. If it is missing, stop and ask; do not guess paths.
+- The registry is `<repo>/config/hosts.json`. Run `<repo>/automation/agent-fabric/bin/fabric-delegate self` to identify this host, then use its registry entry for `catalog_root`. An unknown host stops and is reported.
+- Resolve `project` only below this host's registry `catalog_root`; never use a mount other than the registry catalog root.
+- Read before writing, stay within the resolved project, goal, and acceptance, and do not disclose secrets. Respect permission prompts; pending approval is `blocked`, never success.
+- A target requires Pi and gentle-pi. Claude is optional.
+- Create one fresh UUID `task_id` once per work item. After ambiguity, retain the identical envelope and never mint a replacement ID.
 
 ## Receiving Side
 
-1. Parse and retain the envelope identifiers; select the mode and verify the host-local project path before project operations.
-2. In executor mode, inspect relevant files, make only accepted changes, and collect sanitized evidence.
-3. In orchestrator mode, verify transport before contacting the origin MacBook agent; native gentle-pi orchestrator tools use local-profile Unix sockets and provide no cross-host messaging.
-4. On uncertain delivery, query transport/task state before further action.
+1. Validate and retain the six envelope fields; identify the local registry entry and catalog root before project operations.
+2. For `mode: executor`, perform only accepted local work and return sanitized evidence.
+3. For `mode: orchestrator`, use only verified configured transport; otherwise query state or report the required local work.
+4. On uncertain delivery, query task state before further action.
 
 ## Delegating Side
 
-### Targets
+1. Run `<repo>/automation/agent-fabric/bin/fabric-delegate list`; choose the target the user means by name or role. Ask if that remains ambiguous.
+2. Run `<repo>/automation/agent-fabric/bin/fabric-delegate preflight <target>`.
+3. If preflight returns `catalog_missing` for a spoke, report it or mount once on that target, using registry `share.host`, `share.name`, and `share.user`:
 
-| Local `hostname` | Target | Adapter and prefix | Submit option |
-| --- | --- | --- | --- |
-| `MacBookLeo*` | `ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 leo@MacMiniLeo.local` | `/Volumes/agent-projects/leo/mac-agent-fabric/automation/agent-fabric/bin/fabric-herdr-task`; `PATH=/opt/homebrew/bin:$HOME/.nvm/versions/node/v24.19.0/bin:/usr/bin:/bin /usr/bin/python3` | `--project-root /Volumes/agent-projects` |
-| `MacMiniLeo*` | `ssh agent-fabric-macbook` | `/Users/leo/projects/leo/mac-agent-fabric/automation/agent-fabric/bin/fabric-herdr-task`; `PATH=/opt/homebrew/bin:/usr/bin:/bin /usr/bin/python3` | none (hostname detects it) |
+   ```bash
+   ssh <alias> '/usr/bin/python3 ~/.local/agent-fabric/bin/fabric-smb-mount mount --host <share.host> --share <share.name> --user <share.user>'
+   ```
 
-1. Preflight with `ssh <target> 'test -x <adapter>'`. If the mini is the target and its adapter is missing, run on the mini `ssh <target> '/usr/bin/python3 ~/.local/agent-fabric/bin/fabric-smb-mount status --host MacBookLeo.local --share agent-projects --user leo'`; if not mounted, run the same command with `mount` once. Re-run the preflight; if still missing, stop and report.
-2. Write a local temporary `envelope.json` with **exactly** `task_id`, `origin_host`, `project`, `goal`, `acceptance`, and `mode`. Set `mode` to `executor` (the adapter rejects `orchestrator`), `origin_host` to the short local name (`MacBookLeo` or `MacMiniLeo`), and `project` relative to the catalog (for example `leo/mac-agent-fabric`). Make `goal` fully self-contained: remote Pi has no conversation history. One task creates one fresh remote Pi; a follow-up needs a new task with its needed context.
-3. Submit: `ssh <target> '<prefix> <adapter> submit [--project-root ...]' < envelope.json`; expect `submitted`.
-4. Recover: `ssh <target> '<prefix> <adapter> recover <task_id>'`. It waits up to 120 seconds by default; use `--wait N` up to 900 for long tasks. Repeat while `pending` or `timed_out`; on `done`, read `resulttext`.
-5. Close: `ssh <target> '<prefix> <adapter> close <task_id>'`; expect `closed`.
+   Re-run preflight. Stop and report if it is not ready.
+4. Write `envelope.json` with exactly `task_id`, `origin_host`, `project`, `goal`, `acceptance`, and `mode`. Set `mode` to `executor`; make `origin_host` this host's registry name; make `project` catalog-relative; make `goal` self-contained.
+5. Submit, then recover and close:
+
+   ```bash
+   <repo>/automation/agent-fabric/bin/fabric-delegate submit <target> < envelope.json
+   <repo>/automation/agent-fabric/bin/fabric-delegate recover <target> <task_id> [--wait N]
+   <repo>/automation/agent-fabric/bin/fabric-delegate close <target> <task_id>
+   ```
 
 | Result | Required action |
 | --- | --- |
-| SSH 255 or no submit output | Re-run submit with the **identical** envelope file, or recover; never re-prompt or mint a new `task_id`. |
-| `unknown` | Report `last_error` to the user; do not resubmit. |
-| `failed` with `diagnostic_code` | Fix the input (for example `INVALID_ENVELOPE` or `PROJECT_MISMATCH`), then submit as a **new** task. |
-| `close` is `refused` or `unknown` | Leave it open and report it. |
-| Long task | Raise `--wait` within the 900-second limit. |
+| `unreachable` (exit 3) | The other Mac is off or unreachable. Recover later, re-run submit with the identical envelope, or use local subagents. Never mint a new `task_id` after ambiguity. |
+| `unknown` | Report `last_error`; do not resubmit. |
+| `failed` | Fix input, then create and submit a new task. |
+| `close` refused or unknown | Leave it open and report it. |
 
 ## Output Contract
 
 Receiving side: return `task_id`, status (`done`, `blocked`, `failed`, or `unknown`), sanitized evidence, files touched, and pending approvals or unavailable paths.
 
-Delegating side: report the remote host, `task_id`, status, remote `resulttext`, and anything left open.
+Delegating side: return target, `task_id`, status, remote `resulttext`, and anything left open.
 
 ## References
 
-Relative paths are from the repository skill directory. The repository is `/Users/leo/projects/leo/mac-agent-fabric` on the MacBook and `/Volumes/agent-projects/leo/mac-agent-fabric` on the mini; installed copies may not resolve them.
-
-- `assets/bootstrap-block.md` — startup instruction.
-- `../../docs/setup/agent-guided-setup.md` — host-local installation and acceptance guidance.
-- `../../docs/runbooks/agent-fabric/herdr-tasks.md` — adapter contract and lifecycle.
-- `../../docs/runbooks/agent-fabric/return-transport.md` — mini-to-MacBook SSH transport.
-- `../../docs/runbooks/agent-fabric/smb-mount.md` — mini project-mount recovery.
+- `assets/bootstrap-block.md` — startup instruction and host-local repository path.
+- `../../docs/runbooks/agent-fabric/herdr-tasks.md` — lifecycle and adapter contract.
