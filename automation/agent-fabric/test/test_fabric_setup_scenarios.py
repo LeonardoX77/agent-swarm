@@ -52,7 +52,7 @@ class FakeMacs:
 
     def _remote_python(self, command, program):
         args = shlex.split(command)[2:]
-        environment = dict(os.environ, HOME=str(self.remote_home))
+        environment = dict(os.environ, HOME=str(self.remote_home), PYTHONDONTWRITEBYTECODE="1")
         result = subprocess.run([sys.executable, "-", *args], input=program, text=True,
                                 capture_output=True, cwd=str(self.remote_home), env=environment)
         return Result(result.returncode, result.stdout, result.stderr)
@@ -67,6 +67,8 @@ class FakeMacs:
             result = subprocess.run(["/bin/sh", "-c", command], text=True, capture_output=True,
                                     env=dict(os.environ, HOME=str(self.remote_home)))
             return Result(result.returncode, result.stdout, result.stderr)
+        if command.startswith("PYTHONDONTWRITEBYTECODE=1 "):
+            command = command.split(" ", 1)[1]
         if command == 'printf %s "$HOME"': return Result(out=str(self.remote_home))
         if command == "true": return Result(0 if self.authorization_polls >= self.authorized_after else 1)
         if command.startswith("command -v "):
@@ -284,6 +286,16 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertEqual(remote_before, self.snapshot(machines.remote_home))
         self.assertEqual(registry_before, registry_path.read_bytes())
         self.assertFalse(setup.state_path.exists())
+
+    def test_dry_run_remote_skill_is_ok_without_local_state(self):
+        machines, first, registry_path = self.run_zero_to_done()
+        first.state_path.unlink()
+        dry_run, _ = self.make_setup(machines, registry_path, dry_run=True)
+
+        self.assertEqual(dry_run.run(), 4, dry_run.output.getvalue())
+        self.assertIn("[ 8/10] skill           OK       skill and bootstrap already configured", dry_run.output.getvalue())
+        self.assertNotIn("would copy", dry_run.output.getvalue())
+        self.assertNotIn("would update", dry_run.output.getvalue())
 
     def test_dry_run_on_configured_state_exits_zero(self):
         machines, first, registry_path = self.run_zero_to_done()

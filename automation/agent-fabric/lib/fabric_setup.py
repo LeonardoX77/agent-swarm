@@ -115,7 +115,7 @@ class Setup:
 
     def remote_python(self, program, args=()):
         """Run a reviewed Python 3.9 program remotely; values are JSON argv, never shell code."""
-        command = "python3 - " + " ".join(shlex.quote(json.dumps(x)) for x in args)
+        command = "PYTHONDONTWRITEBYTECODE=1 python3 - " + " ".join(shlex.quote(json.dumps(x)) for x in args)
         return self.remote_tool(command, 60, program)
 
     def discover_remote_path(self):
@@ -359,9 +359,6 @@ if not m:
         return digest.hexdigest()
 
     def skill(self):
-        if self.dry_run:
-            configured = self.state["phases"].get("skill", {}).get("status") in ("ok", "changed") and "registry" not in self.changed
-            return self.result("ok" if configured else "changed", "skill and bootstrap already configured" if configured else "would copy skill and bootstrap")
         repository = Path(__file__).resolve().parents[3]; source = repository / "skills/agent-fabric-remote"; source_hash = self.canonical_digest(source)
         remote_program = """import hashlib,json,pathlib,sys
 r=pathlib.Path(json.loads(sys.argv[1])); h=hashlib.sha256()
@@ -372,6 +369,23 @@ print(h.hexdigest())
         target = self.registry.hosts.get(self.name, getattr(self, "generated_registry_entry", None))
         if target is None: raise SetupError("Registry entry is unavailable for skill installation")
         if "claude" in target["runtimes"]: runtimes.append(("claude", "/.claude/skills/agent-fabric-remote", "/.claude/CLAUDE.md"))
+        if self.dry_run:
+            inspect_program = """import hashlib,json,pathlib,re,sys
+r=pathlib.Path(json.loads(sys.argv[1])); a=pathlib.Path(json.loads(sys.argv[2])); b=json.loads(sys.argv[3]); h=hashlib.sha256()
+for p in sorted((x for x in r.rglob('*') if x.is_file()),key=lambda x:x.relative_to(r).as_posix()): h.update(p.relative_to(r).as_posix().encode()+b'\\0'+p.read_bytes()+b'\\0')
+s=a.read_text() if a.exists() else ''; matches=re.findall(r'(?s)<!-- BEGIN AGENT-FABRIC-REMOTE-BOOTSTRAP -->.*?<!-- END AGENT-FABRIC-REMOTE-BOOTSTRAP -->',s)
+print(json.dumps({'digest':h.hexdigest(),'bootstrap':len(matches)==1 and matches[0].strip()==b.strip()}))
+"""
+            changes = []
+            for runtime, suffix, agents_suffix in runtimes:
+                destination = self.remote_home_path(suffix); agents = self.remote_home_path(agents_suffix)
+                block = (source / "assets/bootstrap-block.md").read_text(encoding="utf-8").replace("<REPO_PATH>", target["repo"]).rstrip() + "\n"
+                inspected = self.remote_python(inspect_program, (destination, agents, block))
+                try: status = json.loads(inspected.stdout)
+                except (TypeError, ValueError): raise SetupError("Could not inspect remote %s skill" % runtime)
+                if inspected.returncode or status.get("digest") != source_hash: changes.append("would copy %s skill" % runtime)
+                if not status.get("bootstrap"): changes.append("would update %s bootstrap" % runtime)
+            return self.result("changed" if changes else "ok", ", ".join(changes) or "skill and bootstrap already configured")
         changed = []
         for runtime, suffix, agents_suffix in runtimes:
             destination = self.remote_home_path(suffix); agents = self.remote_home_path(agents_suffix)
@@ -415,7 +429,7 @@ if n!=s:
     def acceptance(self):
         if self.dry_run:
             configured = self.state["phases"].get("acceptance", {}).get("status") == "ok" and not self.changed
-            return self.result("ok" if configured else "changed", "acceptance already configured" if configured else "would run bidirectional acceptance")
+            return self.result("ok" if configured else "changed", "acceptance already configured" if configured else "would run live acceptance (no prior accepted state or other phases would change)")
         local = Path(__file__).resolve().parents[3] / "automation/agent-fabric/bin/fabric-delegate"
         if self.command([str(local), "preflight", self.name]).returncode: raise SetupError("Origin preflight failed")
         remote_delegate = self.registry.get(self.name)["repo"] + "/automation/agent-fabric/bin/fabric-delegate"
