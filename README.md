@@ -24,10 +24,11 @@ Es el canal verificado de punta a punta en ambas direcciones. Un agente de un Ma
 | Documento | Para qué |
 |---|---|
 | [Arquitectura](docs/architecture.md) | Topología, límites y entregables (autoritativo) |
+| [Agregar un equipo al canal Agent Fabric](docs/setup/add-host.md) | Alta genérica de un Mac como spoke del hub Herdr + Pi |
 | [Instalación guiada por agente](docs/setup/agent-guided-setup.md) | Secuencia de instalación con pausas humanas |
 | [Setup MacBook](docs/setup/macbook.md) / [Setup Mac mini](docs/setup/mac-mini.md) | Pasos por host |
 | [Tareas Herdr + Pi](docs/runbooks/agent-fabric/herdr-tasks.md) | Cómo funciona y cómo se usa el adaptador `fabric-herdr-task` |
-| [Canal de retorno mini → MacBook](docs/runbooks/agent-fabric/return-transport.md) | Clave dedicada, verificación de huella, `authorized_keys`, alias y reversión |
+| [Canal SSH bidireccional](docs/runbooks/agent-fabric/ssh-channel.md) | Clave dedicada por dirección, verificación de huella, `authorized_keys`, alias y reversión |
 | [Montaje SMB](docs/runbooks/agent-fabric/smb-mount.md) | `fabric-smb-mount`: montar, desmontar y montaje permanente |
 | [Skill de tareas remotas](skills/agent-fabric-remote/SKILL.md) | Formato del sobre de tarea y reglas para el agente que la recibe |
 | [Operación v1](docs/runbooks/agent-fabric/operation.md) | Runner one-shot por clave restringida |

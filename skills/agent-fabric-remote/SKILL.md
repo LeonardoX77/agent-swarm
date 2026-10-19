@@ -63,4 +63,6 @@ Delegating side: return target, `task_id`, status, remote `resulttext`, and anyt
 ## References
 
 - `assets/bootstrap-block.md` — startup instruction and host-local repository path.
+- `../../docs/setup/add-host.md` — alta de un Mac nuevo en el canal Herdr + Pi.
+- `../../docs/runbooks/agent-fabric/ssh-channel.md` — canal SSH por dirección, huella y alias.
 - `../../docs/runbooks/agent-fabric/herdr-tasks.md` — lifecycle and adapter contract.

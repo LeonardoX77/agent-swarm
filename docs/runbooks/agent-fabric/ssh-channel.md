@@ -1,60 +1,82 @@
-# Transporte de retorno: Mac mini → MacBook
+# Canal SSH bidireccional entre hosts registrados
 
-Este procedimiento permite que un agente del Mac mini invoque el adaptador Herdr que se ejecuta en el MacBook. No incluye material de claves.
+Este runbook configura **una dirección** del canal Agent Fabric: un host de origen se conecta a un host destino con un alias `fabric-<target>`. Repítalo para la dirección inversa. La clave dedicada no lleva frase de paso para que un agente pueda usarla sin atención humana; las restricciones de `authorized_keys` reducen reenvíos, pero **siguen permitiendo una shell** y no son un sandbox.
 
-> La clave dedicada no tiene frase de paso para que un agente pueda usarla sin atención humana. Las restricciones de `authorized_keys` reducen reenvíos, pero **siguen permitiendo una shell**: no constituyen un sandbox.
+Use nombres y valores del registro `config/hosts.json`; no copie nombres de hosts, usuarios ni rutas de este documento.
 
-## 1. Requisito en el MacBook
+## Plantilla por dirección
 
-Active **Remote Login** en el MacBook y compruebe que la cuenta `leo` puede recibir SSH.
+| Marcador | Valor que debe usarse |
+| --- | --- |
+| `<origin>` | Nombre del host que inicia SSH. |
+| `<target>` | Nombre de registro del host destino (`[a-z0-9-]`). |
+| `<host>` | Dirección LAN/Tailscale o nombre confirmado del destino. |
+| `<user>` | Cuenta autorizada en el destino. |
+| `<key>` | `~/.ssh/agent_fabric_<target>` en el origen. |
 
-## 2. Crear la clave dedicada en el mini
+### 1. Activar acceso en el destino
 
-En el Mac mini, cree la clave sólo si aún no existe; no sobrescriba una clave existente:
+**Persona — en la GUI del destino.** Active **Remote Login** para la cuenta `<user>` y confirme la red LAN o Tailscale.
 
-```bash
-if [ -e ~/.ssh/agent_fabric_macbook ] || [ -e ~/.ssh/agent_fabric_macbook.pub ]; then
+**STOP:** el login de macOS, contraseña, firewall, Tailscale y aprobaciones de Sharing requieren intervención humana.
+
+**Cómo verificar:** Remote Login muestra a `<user>` entre las cuentas autorizadas y el destino tiene la dirección `<host>` confirmada.
+
+**Cómo reanudar:** tras la aprobación, repita esa comprobación local; no intente abrir SSH con una contraseña enviada por el agente.
+
+### 2. Crear o reutilizar una clave en el origen
+
+**Agente — en `<origin>`, con autorización.** Puede reutilizar una clave ya funcional para un alias; si no existe, cree una clave dedicada. Nunca sobrescriba una clave existente:
+
+```sh
+if [ -e ~/.ssh/agent_fabric_<target> ] || [ -e ~/.ssh/agent_fabric_<target>.pub ]; then
   echo 'La clave ya existe; no se modifica.' >&2
 else
-  ssh-keygen -t ed25519 -f ~/.ssh/agent_fabric_macbook -N '' -C agent-fabric-mini-to-macbook
+  ssh-keygen -t ed25519 -f ~/.ssh/agent_fabric_<target> -N '' -C agent-fabric-<origin>-to-<target>
 fi
 ```
 
-## 3. Verificar la huella del host antes de confiar
+**Verificación:** existen ambos archivos de la clave nueva, o se documentó la clave previamente funcional que se reutiliza.
 
-Primero, lea la huella directamente en el MacBook:
+### 3. Verificar la huella de host antes de confiar
 
-```bash
+**Persona — delante de la pantalla local de `<target>`.** Lea la huella directamente en el destino y comuníquela por la pantalla o por un canal ya confiable:
+
+```sh
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-En el mini, compare esa huella con el resultado de:
+**STOP:** no agregue `known_hosts` ni acepte una conexión SSH hasta comparar esta lectura local con el escaneo del origen.
 
-```bash
-ssh-keyscan -t ed25519 MacBookLeo.local | ssh-keygen -lf -
+**Agente — en `<origin>`.** Obtenga la huella observada desde la red:
+
+```sh
+ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
 ```
 
-Sólo si ambas huellas coinciden, añada la clave escaneada a `~/.ssh/known_hosts`. No desactive nunca `StrictHostKeyChecking`.
+**Cómo verificar:** tipo de clave y huella coinciden exactamente con la lectura local del destino.
 
-## 4. Autorizar la clave pública en el MacBook
+**Cómo reanudar:** sólo ante coincidencia, agregue la clave escaneada a `~/.ssh/known_hosts`. Ante diferencia, detenga la configuración, verifique `<host>` localmente y repita ambas lecturas. Nunca desactive `StrictHostKeyChecking`.
 
-En el MacBook, haga una copia de seguridad de `~/.ssh/authorized_keys`. Después añada la clave pública del mini, en una sola línea, precedida exactamente por:
+### 4. Autorizar la clave pública en el destino
+
+**Agente — en `<target>`, después de la autorización humana.** Haga una copia de seguridad de `~/.ssh/authorized_keys` y añada, sin sobrescribir líneas existentes, la clave pública del origen. La entrada debe ser una sola línea: el prefijo exacto y después la clave pública original.
 
 ```text
 no-agent-forwarding,no-port-forwarding,no-X11-forwarding
 ```
 
-Conserve el resto de la línea como la clave pública original. Verifique permisos y que la copia de seguridad permite volver atrás.
+**Verificación:** la copia de seguridad existe, la entrada aparece una sola vez, conserva toda la clave pública y las demás entradas permanecen intactas.
 
-## 5. Crear el alias SSH en el mini
+### 5. Crear el alias en el origen
 
-Añada este bloque a `~/.ssh/config` en el mini:
+**Agente — en `<origin>`.** Añada a `~/.ssh/config`:
 
 ```sshconfig
-Host agent-fabric-macbook
-  HostName MacBookLeo.local
-  User leo
-  IdentityFile ~/.ssh/agent_fabric_macbook
+Host fabric-<target>
+  HostName <host>
+  User <user>
+  IdentityFile ~/.ssh/agent_fabric_<target>
   IdentitiesOnly yes
   BatchMode yes
   StrictHostKeyChecking yes
@@ -64,26 +86,24 @@ Host agent-fabric-macbook
   ForwardAgent no
 ```
 
-## 6. Verificar conectividad
+Al reutilizar una clave existente, conserve su `IdentityFile`; el resto de controles sigue siendo obligatorio.
 
-Desde el mini:
+**Verificación:** desde `<origin>`, ejecute:
 
-```bash
-ssh agent-fabric-macbook hostname
+```sh
+ssh fabric-<target> hostname
 ```
 
-La configuración se realizó y verificó en vivo: el canal mini → MacBook devolvió el nonce exacto en la tarea del adaptador `03423bd5`.
+Debe devolver el nombre del destino sin solicitar contraseña ni confirmar una huella. Repita los pasos 1–5 con origen y destino intercambiados para obtener comunicación en ambos sentidos.
 
-## 7. Invocar el adaptador
+## Uso con Agent Fabric
 
-Un agente del mini envía el sobre JSON por entrada estándar y después usa `recover` y `close` para la misma tarea:
+Una vez que ambas direcciones responden, confirme el registro y el catálogo con `fabric-delegate preflight <target>`. Si el destino es un spoke y informa `catalog_missing`, configure su montaje SMB antes de enviar tareas. Consulte [Agregar un equipo al canal Agent Fabric](../../setup/add-host.md) para el proceso completo y [Montaje SMB entre equipos](smb-mount.md) para el montaje persistente.
 
-```bash
-ssh agent-fabric-macbook 'PATH=/opt/homebrew/bin:/usr/bin:/bin /usr/bin/python3 /Users/leo/projects/leo/mac-agent-fabric/automation/agent-fabric/bin/fabric-herdr-task submit' < envelope.json
-```
+## Reversión por dirección
 
-No cree un identificador de tarea nuevo para recuperar una ejecución ambigua: use `recover` y, al finalizar, `close` con el mismo identificador.
+**Agente — con autorización.** Quite el bloque `Host fabric-<target>` del origen, la entrada que se añadió a `authorized_keys` en el destino (o restaure la copia de seguridad si sólo contiene este cambio), y el par de clave dedicada `agent_fabric_<target>` del origen. No elimine una clave reutilizada ni una copia de seguridad con cambios ajenos.
 
-## 8. Reversión
+## Registro: MacBook ↔ Mac mini
 
-En el MacBook, elimine la línea añadida a `authorized_keys` o restaure su copia de seguridad. En el mini, elimine el bloque `Host agent-fabric-macbook` de `~/.ssh/config` y borre el par `~/.ssh/agent_fabric_macbook` y `~/.ssh/agent_fabric_macbook.pub`.
+La configuración histórica del canal Mac mini → MacBook verificó la huella del MacBook localmente, instaló una clave dedicada restringida y ejecutó `ssh ... hostname`. Una tarea Herdr viva `03423bd5` devolvió el nonce exacto. El alias de esa dirección está siendo renombrado por T4 a `fabric-macbook`; use el registro y no el alias histórico al operar.

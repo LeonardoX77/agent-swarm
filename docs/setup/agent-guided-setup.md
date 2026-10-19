@@ -1,5 +1,7 @@
 # Instalación guiada por agente (v1)
 
+Para configurar el canal **Herdr + Pi** entre un hub y un Mac nuevo, siga [Agregar un equipo al canal Agent Fabric](add-host.md). El resto de esta guía cubre el runner v1.
+
 Esta es la secuencia canónica para preparar Agent Fabric v1 entre la MacBook y la Mac mini. Intercala comprobaciones que un agente **ya autorizado** puede hacer con pausas que requieren una persona en el host correcto. No concede permisos: que una acción sea automatizable no autoriza instalaciones, red, `sudo` ni cambios persistentes. La v1 es one-shot; el canal persistente de Herdr sigue sin implementar.
 
 **Fuera de alcance:** Bea (`beatrizdelcampo`) es evidencia experimental, no un host ni una cuenta soportados por v1. No se crea ninguna cuenta ni se usa `tmux`.
