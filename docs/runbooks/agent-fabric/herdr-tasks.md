@@ -1,6 +1,6 @@
 # Tareas Pi mediante Herdr (host-local)
 
-`fabric-herdr-task` crea recursos exclusivos de Herdr para una tarea Pi y conserva una evidencia JSONL verificable. El adaptador se ejecuta en el host que controla Herdr; puede invocarse por SSH normal desde el Mac de origen. No despliega nada ni sustituye el transporte v1.
+`fabric-herdr-task` crea recursos exclusivos de Herdr para una tarea Pi y conserva una evidencia JSONL verificable. El adaptador se ejecuta en el host que controla Herdr; puede invocarse por SSH normal desde el Mac de origen. No despliega nada ni sustituye el transporte v1. Para mantener Herdr y los demás componentes del host sin interrumpir pestañas activas, consulte [Actualización automática](auto-update.md).
 
 ## Cómo funciona
 

@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Check and update Agent Fabric host tools without sudo (macOS only)."""
+import argparse
+import fcntl
+import json
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+COMPONENTS = ("herdr", "mosh", "moshi-hook", "pi", "pi-extensions")
+DEFAULT_CONFIG = {"enabled": True, "hour": 4, "minute": 30, "components": list(COMPONENTS)}
+
+class ToolError(Exception):
+    pass
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ToolError(message)
+
+class FabricUpdate:
+    def __init__(self, runner=None, home=None, uid=None, clock=None, environ=None, verbose=False):
+        self.runner = runner or self._subprocess_runner
+        self.home = Path(home) if home is not None else Path.home()
+        self.uid = os.getuid() if uid is None else uid
+        self.clock = clock or time.time
+        self.environ = dict(os.environ if environ is None else environ)
+        # `brew outdated` otherwise performs Homebrew's implicit metadata update.
+        # Explicit `brew update` remains available to run and check --refresh.
+        self.environ.setdefault("HOMEBREW_NO_AUTO_UPDATE", "1")
+        self.verbose = verbose
+        self.commands = []
+
+    @staticmethod
+    def _subprocess_runner(argv, timeout=30, env=None):
+        return subprocess.run(argv, text=True, capture_output=True, timeout=timeout, env=env)
+
+    def _run(self, argv, timeout=30):
+        try:
+            result = self.runner(argv, timeout=timeout, env=self.environ)
+        except TypeError: # Small test runners may not accept env.
+            result = self.runner(argv, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result = type("Result", (), {"returncode": 1, "stdout": "", "stderr": str(exc)})()
+        self.commands.append({"argv": argv, "exit_code": result.returncode,
+                              "output": ((result.stdout or "") + (result.stderr or "")).strip()})
+        return result
+
+    def config_path(self): return self.home / ".config/agent-fabric/update.json"
+    def stamp_path(self): return self.home / ".local/state/agent-fabric/update/last-run.json"
+    def log_path(self): return self.home / "Library/Logs/mac-agent-fabric/fabric-update.log"
+    def plist_path(self): return self.home / "Library/LaunchAgents/com.mac-agent-fabric.update.plist"
+    def local_script_path(self): return self.home / ".local/agent-fabric/bin/fabric-update"
+
+    def read_config(self):
+        try:
+            value = json.loads(self.config_path().read_text())
+        except FileNotFoundError:
+            raise ToolError("Configuration is not installed; run install first")
+        except (ValueError, OSError):
+            raise ToolError("Configuration is invalid")
+        required = {"enabled", "hour", "minute", "components", "path"}
+        if set(value) != required or type(value["enabled"]) is not bool or type(value["hour"]) is not int or type(value["minute"]) is not int or type(value["path"]) is not str or not value["path"] or not isinstance(value["components"], list):
+            raise ToolError("Configuration is invalid")
+        if not 0 <= value["hour"] <= 23 or not 0 <= value["minute"] <= 59 or not value["components"] or any(item not in COMPONENTS for item in value["components"]) or len(set(value["components"])) != len(value["components"]):
+            raise ToolError("Configuration is invalid")
+        return value
+
+    def atomic_write(self, path, data, mode=0o644):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp = tempfile.mkstemp(prefix="." + path.name + ".", dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "wb") as output:
+                output.write(data); output.flush(); os.fsync(output.fileno())
+            os.chmod(temp, mode); os.replace(temp, path)
+        finally:
+            if os.path.exists(temp): os.unlink(temp)
+
+    def write_config(self, config):
+        self.atomic_write(self.config_path(), (json.dumps(config, sort_keys=True) + "\n").encode())
+    def write_stamp(self, stamp):
+        self.atomic_write(self.stamp_path(), (json.dumps(stamp, sort_keys=True) + "\n").encode())
+    def component(self, name): return Component(self, name)
+
+    def check(self, names, refresh=False):
+        # check is deliberately read-only; refresh is reserved for callers wanting brew metadata.
+        if refresh and any(name in ("herdr", "mosh", "moshi-hook") for name in names): self._run(["brew", "update"], 1200)
+        return [self.component(name).check() for name in names]
+
+    def run_update(self, force=False):
+        config = self.read_config()
+        if not config["enabled"]:
+            return {"exit_code": 0, "throttled": False, "components": [], "message": "Updates are disabled"}
+        try: stamp = json.loads(self.stamp_path().read_text())
+        except (OSError, ValueError): stamp = {}
+        if not force and type(stamp.get("finished_at")) in (int, float) and self.clock() - stamp["finished_at"] < 72000:
+            return {"exit_code": 0, "throttled": True, "components": [], "message": "Last successful run was less than 20 hours ago"}
+        names = config["components"]
+        self.environ["PATH"] = config["path"]
+        if any(name in ("herdr", "mosh", "moshi-hook") for name in names): self._run(["brew", "update"], 1200)
+        results = []
+        failed = False
+        for name in names:
+            component = self.component(name); item = component.check()
+            if item["status"] == "installed" and item.get("outdated"):
+                item = component.update(); item["name"] = name
+                if item["status"] == "failed": failed = True
+            results.append(item)
+        code = 1 if failed else 0
+        if code == 0: self.write_stamp({"finished_at": self.clock(), "result": "ok"})
+        return {"exit_code": code, "throttled": False, "components": results}
+
+    def install(self, hour=4, minute=30, components=None, path=None):
+        components = list(COMPONENTS) if components is None else components
+        path = self.environ.get("PATH", "") if path is None else path
+        config = {"enabled": True, "hour": hour, "minute": minute, "components": components, "path": path}
+        # Validate before writing anything.
+        self.atomic_write(self.config_path(), (json.dumps(config) + "\n").encode())
+        self.read_config()
+        self.local_script_path().parent.mkdir(parents=True, exist_ok=True)
+        self.atomic_write(self.local_script_path(), Path(__file__).read_bytes(), 0o755)
+        data = {"Label": "com.mac-agent-fabric.update", "ProgramArguments": ["/usr/bin/python3", str(self.local_script_path()), "run"],
+                "RunAtLoad": False, "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+                "EnvironmentVariables": {"PATH": path}, "StandardOutPath": str(self.log_path()), "StandardErrorPath": str(self.log_path())}
+        self.atomic_write(self.plist_path(), plistlib.dumps(data), 0o644)
+        label = "gui/%s/com.mac-agent-fabric.update" % self.uid
+        self._run(["/bin/launchctl", "bootout", label])
+        result = self._run(["/bin/launchctl", "bootstrap", "gui/%s" % self.uid, str(self.plist_path())])
+        if result.returncode: raise ToolError("Could not bootstrap LaunchAgent")
+        return {"installed": True, "plist": str(self.plist_path())}
+
+    def uninstall(self):
+        self._run(["/bin/launchctl", "bootout", "gui/%s/com.mac-agent-fabric.update" % self.uid])
+        if self.plist_path().exists(): self.plist_path().unlink()
+        return {"uninstalled": True}
+
+    def status(self):
+        config = self.read_config()
+        loaded = self._run(["/bin/launchctl", "print", "gui/%s/com.mac-agent-fabric.update" % self.uid]).returncode == 0
+        try: stamp = json.loads(self.stamp_path().read_text())
+        except (OSError, ValueError): stamp = None
+        return {"config": config, "loaded": loaded, "last_run": stamp}
+
+class Component:
+    def __init__(self, tool, name): self.tool, self.name = tool, name
+    def _brew_name(self): return self.name
+    def source(self):
+        if self.name == "moshi-hook":
+            if self.tool._run(["brew", "list", "--versions", "moshi-hook"]).returncode == 0: return "brew"
+            return "standalone"
+        return "brew" if self.name in ("herdr", "mosh") else "pi"
+    def check(self):
+        if self.name in ("herdr", "mosh"):
+            listed = self.tool._run(["brew", "list", "--versions", self.name])
+            if listed.returncode: return {"name": self.name, "status": "skipped", "reason": "not installed"}
+            return self._brew_check(listed.stdout)
+        if self.name == "moshi-hook":
+            source = self.source()
+            if source == "brew":
+                listed = self.tool._run(["brew", "list", "--versions", "moshi-hook"]); return self._brew_check(listed.stdout)
+            probe = self.tool._run(["moshi-hook", "--version"])
+            local = self.tool.home / ".local/bin/moshi-hook"
+            if probe.returncode and not local.exists(): return {"name": self.name, "status": "skipped", "reason": "not installed"}
+            return {"name": self.name, "status": "installed", "current": (probe.stdout or "").strip() or "unknown", "outdated": True, "source": "standalone"}
+        probe = self.tool._run(["pi", "--version"])
+        if probe.returncode: return {"name": self.name, "status": "skipped", "reason": "not installed"}
+        return {"name": self.name, "status": "installed", "current": probe.stdout.strip(), "outdated": True, "source": "pi"}
+    def _brew_check(self, text):
+        current = text.strip().split()[-1] if text.strip() else "unknown"
+        result = self.tool._run(["brew", "outdated", "--json=v2", self.name])
+        try: formulae = json.loads(result.stdout).get("formulae", [])
+        except ValueError: formulae = []
+        item = formulae[0] if formulae else None
+        available = item.get("current_version") if item else current
+        return {"name": self.name, "status": "installed", "current": current, "available": available, "outdated": bool(item), "source": "brew"}
+    def update(self):
+        if self.name in ("herdr", "mosh") or (self.name == "moshi-hook" and self.source() == "brew"):
+            result = self.tool._run(["brew", "upgrade", self.name], 1200)
+        elif self.name == "moshi-hook":
+            binary = "moshi-hook" if self.tool._run(["moshi-hook", "--version"]).returncode == 0 else str(self.tool.home / ".local/bin/moshi-hook")
+            result = self.tool._run([binary, "update"], 300)
+        elif self.name == "pi": result = self.tool._run(["pi", "update", "--self"], 600)
+        else: result = self.tool._run(["pi", "update", "--extensions"], 600)
+        item = {"name": self.name, "status": "updated" if result.returncode == 0 else "failed"}
+        if self.name == "herdr" and result.returncode == 0:
+            binary = self.tool._run(["herdr", "--version"])
+            item["binary_version"] = binary.stdout.strip() or "unknown"
+            # Server inspection is intentionally read-only; no server restart is ever requested.
+            server_help = self.tool._run(["herdr", "server", "--help"])
+            if server_help.returncode == 0 and "version" in (server_help.stdout + server_help.stderr).lower():
+                server = self.tool._run(["herdr", "server", "version"])
+                if server.returncode == 0: item["server_version"] = server.stdout.strip()
+            item["server_restart_pending"] = True
+        if self.name == "moshi-hook" and result.returncode == 0:
+            help_result = self.tool._run(["moshi-hook", "service", "--help"])
+            if help_result.returncode == 0 and "restart" in (help_result.stdout + help_result.stderr): self.tool._run(["moshi-hook", "service", "restart"])
+        if result.returncode: item["reason"] = (result.stderr or result.stdout).strip() or "update command failed"
+        return item
+
+def build_parser():
+    parser = Parser(prog="fabric-update", description=__doc__)
+    parser.add_argument("--json", action="store_true"); parser.add_argument("--verbose", action="store_true")
+    commands = parser.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check"); check.add_argument("--refresh", action="store_true")
+    run = commands.add_parser("run"); run.add_argument("--force", action="store_true")
+    install = commands.add_parser("install"); install.add_argument("--hour", type=int, default=4); install.add_argument("--minute", type=int, default=30); install.add_argument("--components"); install.add_argument("--path")
+    uninstall = commands.add_parser("uninstall"); status = commands.add_parser("status")
+    # Permit operational flags both before and after the subcommand.
+    for command in (check, run, install, uninstall, status):
+        command.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        command.add_argument("--verbose", action="store_true", default=argparse.SUPPRESS)
+    return parser
+
+def run(argv=None, runner=None, home=None, uid=None, clock=None, environ=None):
+    try:
+        args = build_parser().parse_args(argv)
+        if (uid if uid is not None else os.getuid()) == 0: raise ToolError("Refusing to run as root")
+        tool = FabricUpdate(runner, home, uid, clock, environ, args.verbose)
+        if args.command == "check": response = {"components": tool.check(list(COMPONENTS), args.refresh)}; code = 0
+        elif args.command == "run":
+            lock_path = tool.stamp_path().parent / "fabric-update.lock"
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("w") as lock:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise ToolError("Another fabric-update run is already active")
+                response = tool.run_update(args.force); code = response.pop("exit_code")
+                # The run log always includes command evidence, independent of console verbosity.
+                tool.log_path().parent.mkdir(parents=True, exist_ok=True)
+                with tool.log_path().open("a") as log:
+                    log.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), json.dumps({"result": response, "commands": tool.commands}, sort_keys=True)))
+        elif args.command == "install":
+            pieces = args.components.split(",") if args.components else list(COMPONENTS)
+            if not (0 <= args.hour <= 23 and 0 <= args.minute <= 59) or not pieces or any(x not in COMPONENTS for x in pieces) or len(set(pieces)) != len(pieces): raise ToolError("Invalid install options")
+            response = tool.install(args.hour, args.minute, pieces, args.path); code = 0
+        elif args.command == "uninstall": response = tool.uninstall(); code = 0
+        else: response = tool.status(); code = 0
+        response["commands"] = tool.commands
+        return code, response
+    except ToolError as exc: return 2, {"error": str(exc)}
+    except Exception: return 2, {"error": "Unexpected internal error"}
+
+def main():
+    code, response = run()
+    if "commands" in response and any(arg in sys.argv for arg in ("--verbose",)):
+        for item in response["commands"]: print("$ %s\nexit %s: %s" % (" ".join(item["argv"]), item["exit_code"], item["output"][:1000]))
+    if "--json" in sys.argv: print(json.dumps(response, sort_keys=True))
+    elif "components" in response:
+        for item in response["components"]:
+            text = "%s  %s" % (item["name"].ljust(12), item["status"])
+            if item.get("current"): text = "%s  %s%s" % (item["name"].ljust(12), item["current"], " -> " + item["available"] if item.get("outdated") and item.get("available") else "")
+            if item.get("server_restart_pending"): text += " (server restart pending)"
+            print(text)
+    else: print(response.get("message", "ok"))
+    return code
+if __name__ == "__main__": sys.exit(main())
