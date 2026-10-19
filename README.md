@@ -15,6 +15,27 @@ Agent Fabric conecta por SSH dos hosts macOS para despachar tareas entre sí. Es
 
 Para retirar únicamente los recursos creados por Fabric, seguí la [guía de reversión controlada](docs/runbooks/agent-fabric/rollback.md).
 
+## Canal entre agentes (Herdr + Pi)
+
+Es el canal verificado de punta a punta en ambas direcciones. Un agente de un Mac se conecta por SSH al otro y ejecuta `fabric-herdr-task`, que abre una Pi propia en Herdr, le envía la tarea una sola vez y lee la respuesta del historial de sesión de Pi.
+
+## Índice de documentación
+
+| Documento | Para qué |
+|---|---|
+| [Arquitectura](docs/architecture.md) | Topología, límites y entregables (autoritativo) |
+| [Instalación guiada por agente](docs/setup/agent-guided-setup.md) | Secuencia de instalación con pausas humanas |
+| [Setup MacBook](docs/setup/macbook.md) / [Setup Mac mini](docs/setup/mac-mini.md) | Pasos por host |
+| [Tareas Herdr + Pi](docs/runbooks/agent-fabric/herdr-tasks.md) | Cómo funciona y cómo se usa el adaptador `fabric-herdr-task` |
+| [Canal de retorno mini → MacBook](docs/runbooks/agent-fabric/return-transport.md) | Clave dedicada, verificación de huella, `authorized_keys`, alias y reversión |
+| [Montaje SMB](docs/runbooks/agent-fabric/smb-mount.md) | `fabric-smb-mount`: montar, desmontar y montaje permanente |
+| [Skill de tareas remotas](skills/agent-fabric-remote/SKILL.md) | Formato del sobre de tarea y reglas para el agente que la recibe |
+| [Operación v1](docs/runbooks/agent-fabric/operation.md) | Runner one-shot por clave restringida |
+| [Validación](docs/runbooks/agent-fabric/validation.md) | Checklist antes de operar |
+| [Reversión](docs/runbooks/agent-fabric/rollback.md) | Retirar recursos creados por Fabric |
+| [Evidencia de pruebas](docs/runbooks/agent-fabric/test-evidence.md) | Qué se probó, resultados, métodos de comunicación y límites |
+| [Plan del adaptador](odd/tasks/pi-herdr-adapter.md) | Decisiones, tareas y evidencia del trabajo en curso |
+
 ## Decisiones de v1
 
 | Tema | Decisión |
