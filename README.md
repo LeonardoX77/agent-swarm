@@ -8,7 +8,7 @@ Agent Fabric conecta por SSH dos hosts macOS para despachar tareas entre sí. Es
 
 1. Seguí la [instalación guiada por agente](docs/setup/agent-guided-setup.md): es la secuencia canónica de comprobaciones automatizables, pausas humanas y reanudación segura.
 2. Leé la [topología y los límites](docs/architecture.md#topología-y-responsabilidades).
-3. Instalá y autenticá Pi + Gentle Pi, OpenCode y Claude Code localmente en ambos hosts; no copies `HOME`, Keychain, credenciales ni sesiones.
+3. Instalá y autenticá localmente los runtimes que vayas a usar; no copies `HOME`, Keychain, credenciales ni sesiones. Para el canal Herdr + Pi sólo son obligatorios Pi y gentle-pi (Claude es opcional); el runner v1 necesita además los runtimes que habilites en cada host (OpenCode, Claude Code). Para sumar un equipo nuevo seguí [Agregar un equipo](docs/setup/add-host.md).
 4. Configurá SMB, las claves SSH restringidas y los aliases locales siguiendo la [secuencia de instalación](docs/architecture.md#secuencia-de-instalación), con presencia humana para cada cambio de host.
 5. Seguí el [runbook de validación](docs/runbooks/agent-fabric/validation.md) antes de operar.
 6. Creá y despachá una solicitud JSON con la [guía de operación bidireccional](docs/runbooks/agent-fabric/operation.md). Elegí explícitamente el runtime; el host destino ejecuta el CLI permitido bajo **su propia** cuenta local.
