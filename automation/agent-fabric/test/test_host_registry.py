@@ -13,8 +13,8 @@ VALID = {
     'hub': 'macbook',
     'share': {'host': 'MacBookLeo.local', 'name': 'agent-projects', 'user': 'leo'},
     'hosts': {
-        'macbook': {'hostname_prefix': 'MacBookLeo', 'role': 'hub', 'ssh_alias': 'fabric-macbook', 'catalog_root': '/Users/leo/projects', 'repo': '/Users/leo/projects/leo/mac-agent-fabric', 'path': '/opt/homebrew/bin:/usr/bin:/bin', 'gui_cwd': '/Users/leo/tmp', 'runtimes': ['pi', 'claude']},
-        'mac-mini': {'hostname_prefix': 'MacMiniLeo', 'role': 'spoke', 'ssh_alias': 'fabric-mac-mini', 'catalog_root': '/Volumes/agent-projects', 'repo': '/Volumes/agent-projects/leo/mac-agent-fabric', 'path': '/opt/homebrew/bin:/usr/bin:/bin', 'gui_cwd': '/Users/leo/tmp', 'runtimes': ['pi']},
+        'macbook': {'hostname_prefix': 'MacBookLeo', 'role': 'hub', 'ssh_alias': 'fabric-macbook', 'address': 'MacBookLeo.local', 'catalog_root': '/Users/leo/projects', 'repo': '/Users/leo/projects/leo/mac-agent-fabric', 'path': '/opt/homebrew/bin:/usr/bin:/bin', 'gui_cwd': '/Users/leo/tmp', 'runtimes': ['pi', 'claude']},
+        'mac-mini': {'hostname_prefix': 'MacMiniLeo', 'role': 'spoke', 'ssh_alias': 'fabric-mac-mini', 'address': 'MacMiniLeo.local', 'catalog_root': '/Volumes/agent-projects', 'repo': '/Volumes/agent-projects/leo/mac-agent-fabric', 'path': '/opt/homebrew/bin:/usr/bin:/bin', 'gui_cwd': '/Users/leo/tmp', 'runtimes': ['pi']},
     },
 }
 
@@ -41,6 +41,8 @@ class HostRegistryTests(unittest.TestCase):
             {**VALID, 'share': {**VALID['share'], 'extra': 'x'}},
             {**VALID, 'hosts': {**VALID['hosts'], 'bad_name': VALID['hosts']['macbook']}},
             {**VALID, 'hosts': {**VALID['hosts'], 'macbook': {**VALID['hosts']['macbook'], 'role': 'spoke'}}},
+            {**VALID, 'hosts': {**VALID['hosts'], 'macbook': {k: v for k, v in VALID['hosts']['macbook'].items() if k != 'address'}}},
+            {**VALID, 'hosts': {**VALID['hosts'], 'macbook': {**VALID['hosts']['macbook'], 'address': 'bad address'}}},
             {**VALID, 'hosts': {**VALID['hosts'], 'macbook': {**VALID['hosts']['macbook'], 'catalog_root': 'relative'}}},
             {**VALID, 'hosts': {**VALID['hosts'], 'macbook': {**VALID['hosts']['macbook'], 'runtimes': ['claude']}}},
             {**VALID, 'hosts': {**VALID['hosts'], 'macbook': {**VALID['hosts']['macbook'], 'hostname_prefix': 'Mac'}}},

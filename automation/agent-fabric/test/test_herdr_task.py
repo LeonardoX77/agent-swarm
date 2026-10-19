@@ -268,7 +268,7 @@ class HerdrTaskTests(unittest.TestCase):
             default_task = {**ENVELOPE, 'task_id': '550e8400-e29b-41d4-a716-446655440003'}
             default_session = root / 'state-default' / 'sessions' / default_task['task_id'] / 'session.jsonl'
             registry = root / 'hosts.json'
-            registry.write_text(json.dumps({'version': 1, 'hub': 'mini', 'share': {'host': 'hub.local', 'name': 'projects', 'user': 'leo'}, 'hosts': {'mini': {'hostname_prefix': 'MacMiniLeo', 'role': 'hub', 'ssh_alias': 'fabric-mini', 'catalog_root': str(catalog), 'repo': str(root), 'path': '/usr/bin:/bin', 'gui_cwd': str(gui), 'runtimes': ['pi']}}}))
+            registry.write_text(json.dumps({'version': 1, 'hub': 'mini', 'share': {'host': 'hub.local', 'name': 'projects', 'user': 'leo'}, 'hosts': {'mini': {'hostname_prefix': 'MacMiniLeo', 'role': 'hub', 'ssh_alias': 'fabric-mini', 'address': 'hub.local', 'catalog_root': str(catalog), 'repo': str(root), 'path': '/usr/bin:/bin', 'gui_cwd': str(gui), 'runtimes': ['pi']}}}))
             default = Controller(root / 'state-default', herdr=binary, hostname='MacMiniLeo-test', registry=registry, run=Herdr(default_session))
             self.assertEqual(default.gui_cwd, gui.resolve())
             self.assertEqual(default.submit(default_task)['status'], 'submitted')

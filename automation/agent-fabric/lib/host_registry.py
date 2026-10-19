@@ -9,7 +9,8 @@ from pathlib import Path
 _NAME = re.compile(r'^[a-z0-9-]+$')
 _TOP_LEVEL = {'version', 'hub', 'share', 'hosts'}
 _SHARE = {'host', 'name', 'user'}
-_HOST = {'hostname_prefix', 'role', 'ssh_alias', 'catalog_root', 'repo', 'path', 'gui_cwd', 'runtimes'}
+_HOST = {'hostname_prefix', 'role', 'ssh_alias', 'address', 'catalog_root', 'repo', 'path', 'gui_cwd', 'runtimes'}
+_ADDRESS = re.compile(r'^[A-Za-z0-9.-]+$')
 
 
 class RegistryError(ValueError):
@@ -55,7 +56,7 @@ class HostRegistry:
                 raise RegistryError('INVALID_HOST_REGISTRY')
             if not isinstance(host['hostname_prefix'], str) or not host['hostname_prefix']:
                 raise RegistryError('INVALID_HOST_REGISTRY')
-            if host['role'] not in ('hub', 'spoke') or not _name(host['ssh_alias']):
+            if host['role'] not in ('hub', 'spoke') or not _name(host['ssh_alias']) or not isinstance(host['address'], str) or not _ADDRESS.fullmatch(host['address']):
                 raise RegistryError('INVALID_HOST_REGISTRY')
             if not all(_absolute(host[key]) for key in ('catalog_root', 'repo', 'gui_cwd')):
                 raise RegistryError('INVALID_HOST_REGISTRY')
