@@ -1,11 +1,16 @@
+import contextlib
 import importlib.util
 from importlib.machinery import SourceFileLoader
+import io
 import json
 import plistlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).parents[1] / "bin" / "fabric-update"
 
@@ -21,9 +26,11 @@ class Runner:
     def __init__(self, replies=None):
         self.replies = replies or {}
         self.calls = []
+        self.environments = []
 
     def __call__(self, argv, timeout=30, env=None):
         self.calls.append(argv)
+        self.environments.append(dict(env) if env is not None else None)
         reply = self.replies.get(tuple(argv), self.replies.get(argv[0], (0, "", "")))
         if callable(reply):
             reply = reply(argv)
@@ -41,6 +48,31 @@ class FabricUpdateTests(unittest.TestCase):
 
     def tool(self, replies=None, clock=lambda: 1000000):
         return self.mod.FabricUpdate(Runner(replies), self.home, 501, clock=clock, environ={"PATH": "/test/bin"})
+
+    def test_check_discovers_nvm_path_without_config_and_verbose_prints_it(self):
+        nvm_bin = self.home / ".nvm/versions/node/v20.1.0/bin"
+        nvm_bin.mkdir(parents=True)
+        (self.home / ".nvm/alias").mkdir()
+        (self.home / ".nvm/alias/default").write_text("v20.1.0\n")
+        runner = Runner({("pi", "--version"): (0, "1.2.3\n", "")})
+        output = io.StringIO()
+        with patch.object(self.mod.Path, "home", return_value=self.home), \
+             patch.object(self.mod.FabricUpdate, "_subprocess_runner", staticmethod(runner)), \
+             patch.object(sys, "argv", [str(SCRIPT), "--verbose", "check"]), \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(self.mod.main(), 0)
+        self.assertIn(str(nvm_bin), runner.environments[-1]["PATH"])
+        self.assertIn("PATH=", output.getvalue())
+        self.assertIn(str(nvm_bin), output.getvalue())
+
+    def test_default_runner_runs_real_subprocess_once(self):
+        result = self.mod.FabricUpdate._subprocess_runner(["/usr/bin/true"])
+        self.assertEqual(result.returncode, 0)
+
+    def test_update_help_uses_real_subprocess(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), "--help"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
 
     def test_component_detection_and_skip(self):
         tool = self.tool({"brew": (1, "", "missing"), "moshi-hook": (1, "", ""), "pi": (1, "", "")})

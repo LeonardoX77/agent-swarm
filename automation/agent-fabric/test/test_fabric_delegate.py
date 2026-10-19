@@ -59,6 +59,11 @@ class FabricDelegateTests(unittest.TestCase):
         run.calls = calls
         return run
 
+    def test_help_uses_real_subprocess(self):
+        result = subprocess.run([sys.executable, str(CLI), "--help"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+
     def test_help_prints_usage_and_exits_zero_without_ssh(self):
         run = self.runner()
         out = io.StringIO()

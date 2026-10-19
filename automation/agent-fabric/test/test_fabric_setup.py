@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +60,22 @@ class SetupTests(unittest.TestCase):
         return Setup("new-mac", "New.local", "leo", registry=Registry(), runner=runner, home=home,
                      nodename="Origin.local", tty=False, uid=uid, output=io.StringIO(),
                      sleep=sleep, clock=lambda: now[0], **kwargs)
+
+    def test_default_runner_runs_commands_once(self):
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        home = Path(directory.name) / "home"; home.mkdir()
+        setup = Setup("new-mac", "New.local", "leo", registry=Registry(), home=home,
+                      nodename="Origin.local", uid=501, output=io.StringIO())
+        self.assertEqual(setup.command(["/usr/bin/true"]).returncode, 0)
+        result = setup.command(["/bin/echo", "x"])
+        self.assertEqual((result.returncode, result.stdout), (0, "x\n"))
+
+    def test_setup_help_subcommands_use_real_subprocess(self):
+        script = Path(__file__).parents[1] / "bin" / "fabric-setup"
+        for command in ("add-host", "status"):
+            result = subprocess.run([sys.executable, str(script), command, "--help"], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("usage:", result.stdout)
 
     def test_person_wait_polls_without_tty_until_condition(self):
         setup = self.make(wait_timeout=1)

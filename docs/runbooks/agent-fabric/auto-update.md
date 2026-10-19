@@ -29,7 +29,7 @@ fabric-update status
 fabric-update uninstall         # retira sólo el LaunchAgent
 ```
 
-La salida normal es un resumen en inglés, una línea por componente. `--verbose` añade cada comando, su código de salida y su salida recortada; `--json` emite el informe para automatización. Un fallo de un componente no impide intentar los demás, pero hace que `run` termine con código 1.
+La salida normal es un resumen en inglés, una línea por componente. `--verbose` añade el `PATH` usado y cada comando, su código de salida y su salida recortada; `--json` emite el informe para automatización. Un fallo de un componente no impide intentar los demás, pero hace que `run` termine con código 1. `check` no cambia software instalado, pero Homebrew puede actualizar su caché local de API.
 
 El archivo `~/.config/agent-fabric/update.json` contiene `enabled`, hora, minuto, componentes y el `PATH` que usa el agente. Para desactivar las actualizaciones sin retirar la configuración, cambie estrictamente `"enabled"` a `false`; para retirar el LaunchAgent use `fabric-update uninstall`. Las ejecuciones se registran en `~/Library/Logs/mac-agent-fabric/fabric-update.log` y el último resultado queda en `~/.local/state/agent-fabric/update/last-run.json`.
 

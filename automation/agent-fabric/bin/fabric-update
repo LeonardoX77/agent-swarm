@@ -52,6 +52,41 @@ class FabricUpdate:
 
     def config_path(self): return self.home / ".config/agent-fabric/update.json"
     def stamp_path(self): return self.home / ".local/state/agent-fabric/update/last-run.json"
+
+    def discover_path(self):
+        """Find user tool directories without relying on an interactive shell profile."""
+        paths = []
+        def add(path):
+            if path.is_dir(): paths.append(str(path))
+        add(Path("/opt/homebrew/bin"))
+        add(Path("/usr/local/bin"))
+        nvm = self.home / ".nvm"
+        nvm_bin = None
+        default = nvm / "alias/default"
+        if default.is_file():
+            try: candidate = nvm / "versions/node" / default.read_text().strip() / "bin"
+            except OSError: candidate = None
+            if candidate is not None and candidate.is_dir(): nvm_bin = candidate
+        if nvm_bin is None:
+            candidates = [candidate for candidate in (nvm / "versions/node").glob("*/bin") if candidate.is_dir()]
+            if candidates:
+                def version_key(candidate):
+                    value = candidate.parent.name.lstrip("v").split("-")[0]
+                    try: return tuple(int(part) for part in value.split("."))
+                    except ValueError: return ()
+                nvm_bin = max(candidates, key=version_key)
+        if nvm_bin is not None: add(nvm_bin)
+        add(self.home / ".hermes/node/bin")
+        add(self.home / ".local/bin")
+        return ":".join(paths + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+
+    def use_tool_path(self, config=None):
+        """Use installed configuration when available, else a non-interactive-safe PATH."""
+        if config is None and self.config_path().exists():
+            try: config = self.read_config()
+            except ToolError: pass
+        self.environ["PATH"] = config["path"] if config is not None else self.discover_path()
+        return self.environ["PATH"]
     def log_path(self): return self.home / "Library/Logs/mac-agent-fabric/fabric-update.log"
     def plist_path(self): return self.home / "Library/LaunchAgents/com.mac-agent-fabric.update.plist"
     def local_script_path(self): return self.home / ".local/agent-fabric/bin/fabric-update"
@@ -88,6 +123,7 @@ class FabricUpdate:
 
     def check(self, names, refresh=False):
         # check is deliberately read-only; refresh is reserved for callers wanting brew metadata.
+        self.use_tool_path()
         if refresh and any(name in ("herdr", "mosh", "moshi-hook") for name in names): self._run(["brew", "update"], 1200)
         return [self.component(name).check() for name in names]
 
@@ -100,7 +136,7 @@ class FabricUpdate:
         if not force and type(stamp.get("finished_at")) in (int, float) and self.clock() - stamp["finished_at"] < 72000:
             return {"exit_code": 0, "throttled": True, "components": [], "message": "Last successful run was less than 20 hours ago"}
         names = config["components"]
-        self.environ["PATH"] = config["path"]
+        self.use_tool_path(config)
         if any(name in ("herdr", "mosh", "moshi-hook") for name in names): self._run(["brew", "update"], 1200)
         results = []
         failed = False
@@ -116,8 +152,9 @@ class FabricUpdate:
 
     def install(self, hour=4, minute=30, components=None, path=None):
         components = list(COMPONENTS) if components is None else components
-        path = self.environ.get("PATH", "") if path is None else path
+        path = self.discover_path() if path is None else path
         config = {"enabled": True, "hour": hour, "minute": minute, "components": components, "path": path}
+        self.use_tool_path(config)
         # Validate before writing anything.
         self.atomic_write(self.config_path(), (json.dumps(config) + "\n").encode())
         self.read_config()
@@ -134,12 +171,14 @@ class FabricUpdate:
         return {"installed": True, "plist": str(self.plist_path())}
 
     def uninstall(self):
+        self.use_tool_path()
         self._run(["/bin/launchctl", "bootout", "gui/%s/com.mac-agent-fabric.update" % self.uid])
         if self.plist_path().exists(): self.plist_path().unlink()
         return {"uninstalled": True}
 
     def status(self):
         config = self.read_config()
+        self.use_tool_path(config)
         loaded = self._run(["/bin/launchctl", "print", "gui/%s/com.mac-agent-fabric.update" % self.uid]).returncode == 0
         try: stamp = json.loads(self.stamp_path().read_text())
         except (OSError, ValueError): stamp = None
@@ -241,13 +280,16 @@ def run(argv=None, runner=None, home=None, uid=None, clock=None, environ=None):
         elif args.command == "uninstall": response = tool.uninstall(); code = 0
         else: response = tool.status(); code = 0
         response["commands"] = tool.commands
+        response["path_used"] = tool.environ["PATH"]
         return code, response
     except ToolError as exc: return 2, {"error": str(exc)}
     except Exception: return 2, {"error": "Unexpected internal error"}
 
 def main():
     code, response = run()
+    path_used = response.pop("path_used", None)
     if "commands" in response and any(arg in sys.argv for arg in ("--verbose",)):
+        print("PATH=%s" % path_used)
         for item in response["commands"]: print("$ %s\nexit %s: %s" % (" ".join(item["argv"]), item["exit_code"], item["output"][:1000]))
     if "--json" in sys.argv: print(json.dumps(response, sort_keys=True))
     elif "components" in response:

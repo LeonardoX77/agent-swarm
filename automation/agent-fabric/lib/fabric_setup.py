@@ -60,7 +60,10 @@ class Setup:
 
     @staticmethod
     def _subprocess(argv, **kwargs):
-        return subprocess.run(argv, text=True, capture_output=True, shell=False, timeout=kwargs.pop("timeout", 45), **kwargs)
+        kwargs.setdefault("text", True)
+        kwargs.setdefault("capture_output", True)
+        kwargs.setdefault("shell", False)
+        return subprocess.run(argv, timeout=kwargs.pop("timeout", 45), **kwargs)
 
     def _read_state(self):
         try: return json.loads(self.state_path.read_text(encoding="utf-8"))
