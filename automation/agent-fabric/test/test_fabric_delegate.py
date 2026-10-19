@@ -59,6 +59,16 @@ class FabricDelegateTests(unittest.TestCase):
         run.calls = calls
         return run
 
+    def test_help_prints_usage_and_exits_zero_without_ssh(self):
+        run = self.runner()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = module().main(['--help'], runner=run, registry=FakeRegistry(), nodename='MacBookLeo', stdin=io.StringIO(''))
+        self.assertEqual(code, 0)
+        for action in ('list', 'self', 'preflight', 'submit', 'recover', 'close'):
+            self.assertIn(action, out.getvalue())
+        self.assertEqual(run.calls, [])
+
     def test_list_and_self_mark_the_current_host(self):
         run = self.runner()
         code, result = self.invoke(['list'], run)

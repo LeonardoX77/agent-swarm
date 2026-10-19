@@ -66,12 +66,21 @@ def _target(registry, nodename, name):
 def main(argv=None, *, runner=subprocess.run, registry=None, nodename=None, stdin=None, stdout=None):
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--registry')
+    parser = argparse.ArgumentParser(
+        prog='fabric-delegate', add_help=False,
+        description='Delegate an Agent Fabric task to another registered Mac over SSH.',
+        epilog='actions: list | self | preflight <target> | submit <target> < envelope.json | '
+               'recover <target> <task_id> [--wait N] | close <target> <task_id>')
+    parser.add_argument('--registry', help='host registry (default: config/hosts.json in this repository)')
     parser.add_argument('action', choices=('list', 'self', 'preflight', 'submit', 'recover', 'close'))
-    parser.add_argument('target', nargs='?')
-    parser.add_argument('task_id', nargs='?')
-    parser.add_argument('--wait', default='120')
+    parser.add_argument('target', nargs='?', help='registered host name')
+    parser.add_argument('task_id', nargs='?', help='task UUID for recover and close')
+    parser.add_argument('--wait', default='120', help='recover wait in seconds, 0..900 (default 120)')
+    if argv is None:
+        argv = sys.argv[1:]
+    if '-h' in argv or '--help' in argv:
+        stdout.write(parser.format_help())
+        return 0
     try:
         args = parser.parse_args(argv)
         registry = registry or HostRegistry(args.registry)
