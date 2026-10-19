@@ -1,228 +1,173 @@
 # Agregar un equipo al canal Agent Fabric
 
-Esta guía conecta un Mac nuevo al canal **Herdr + Pi** desde cualquier Mac ya registrado. El modelo es de hub: el host con rol `hub` comparte los proyectos y el Mac nuevo es un `spoke` que monta ese recurso. No cambia hosts por sí sola: cada paso indica quién puede ejecutarlo y dónde debe detenerse una persona.
+El camino canónico para incorporar un Mac nuevo es ejecutar **un único comando** desde un Mac ya registrado. `fabric-setup` coordina las diez fases, se detiene sólo ante acciones humanas y conserva el estado para reanudar la misma operación.
 
-## Resultado esperado y requisitos
+## Camino rápido
 
-Al terminar, el nuevo equipo figura en `config/hosts.json`, puede recibir y originar tareas mediante Herdr + Pi, y monta el catálogo compartido del hub.
+### Requisitos
 
-| Requisito | Condición |
-| --- | --- |
-| Sistema y cuenta | macOS; la misma cuenta de usuario del canal existente o una cuenta elegida explícitamente para este host. |
-| Red | Una ruta verificable por LAN o Tailscale entre ambos equipos. |
-| Runtimes | **Pi y gentle-pi son obligatorios; Claude es opcional.** Herdr es obligatorio porque aloja la Pi. |
-| Autenticación | Pi debe tener un proveedor de modelos funcional, autenticado desde la sesión GUI del nuevo Mac. Puede ser cualquier proveedor; `claude-bridge` es sólo una opción y necesita el llavero de esa sesión GUI. |
-| Proyecto | El repositorio debe existir localmente en el hub y ser visible en el spoke mediante el montaje SMB. Las skills no se comparten por SMB. |
+- El Mac de origen ya está registrado en `config/hosts.json` y se ejecuta el comando desde su checkout del repositorio.
+- El Mac nuevo usa macOS y la persona puede sentarse delante de él para algunos pasos GUI.
+- **Pi y gentle-pi son obligatorios; Claude es opcional; Herdr es obligatorio.**
+- Hay conectividad LAN o Tailscale hacia `<host>.local` y se conoce la cuenta `<user>` del Mac nuevo.
 
-## 1. Elegir nombres antes de configurar
-
-**Agente — en el Mac registrado que coordina el alta.** Elija un nombre de registro único, por ejemplo `studio-mac`, que cumpla `[a-z0-9-]`. Su alias será `fabric-studio-mac`. En el Mac nuevo, obtenga el prefijo de nombre de host que irá en el registro:
+Desde el Mac registrado, ejecute:
 
 ```sh
-scutil --get LocalHostName || hostname
+automation/agent-fabric/bin/fabric-setup add-host \
+  --name <name> --address <host>.local --user <user> \
+  [--host-fingerprint SHA256:...] [--install-missing] \
+  [--update-time 04:30 | --no-auto-update] [--verbose]
 ```
 
-Anote también el usuario elegido, la dirección LAN o Tailscale y la ruta local que tendrá el repositorio en ese Mac. No copie rutas de otro host.
+El valor predeterminado instala la actualización diaria a las `04:30`. El proceso muestra un resumen breve en inglés; por ejemplo:
 
-**Verificación:** el nombre de registro, `fabric-<name>`, usuario, dirección y `hostname_prefix` están decididos y no contradicen una entrada existente de `config/hosts.json`.
-
-## 2. Preparar el Mac nuevo y la sesión gráfica
-
-**Persona — en el Mac nuevo.** Active **System Settings → General → Sharing → Remote Login** para la cuenta elegida. Instale Homebrew, Node, Pi, gentle-pi y Herdr siguiendo sus instaladores/documentación aprobados localmente. Con Pi ya instalado, instale gentle-pi:
-
-```sh
-pi install npm:gentle-pi
+```text
+[ 1/10] local-preflight OK       origin preflight passed
+...
+[10/10] acceptance      OK       bidirectional acceptance passed
+Summary: setup complete; changed phases: ssh-to-new, registry, skill, auto-update
 ```
 
-Abra Pi **en la sesión GUI** y complete el login del proveedor que use; haga una consulta inocua y confirme que responde. Abra Herdr en esa misma sesión GUI.
+Al completar con éxito termina con salida `0`. Revise el cambio generado y haga el commit de `config/hosts.json` según el flujo Git aprobado. No copie manualmente valores de `share`: el script los lee del registro.
 
-**STOP:** contraseñas, login de proveedor, aprobaciones del sistema, instalación de software o acceso al llavero requieren a la persona. No los introduzca ni los automatice por SSH.
+> Si se interrumpe o espera a una persona, ejecute **el mismo comando** otra vez desde el origen. Conserva las fases terminadas y retoma desde la primera pendiente.
 
-**Cómo verificar:** Remote Login muestra la cuenta autorizada; `pi --version` funciona en la cuenta elegida; una consulta GUI de Pi recibe respuesta; Herdr está abierto en esa sesión.
+## Las diez fases
 
-**Cómo reanudar:** tras completar o aprobar cada intervención, vuelva a ejecutar sólo la comprobación correspondiente y continúe con el paso 3. Si Pi dice `Not logged in`, vuelva a la sesión GUI, no al SSH.
+Los nombres de fase siguientes son los que imprime el programa exactamente.
 
-## 3. Crear los dos canales SSH
+| Fase | Qué hace el script | Quién actúa | Si se detiene, texto exacto que muestra |
+| --- | --- | --- | --- |
+| `local-preflight` | Valida nombre, dirección, herramientas SSH y que el origen sea el `self_host` del registro. | Agente | No espera a una persona. |
+| `remote-login` | Comprueba que el puerto SSH del Mac nuevo sea alcanzable. | Persona | `On <name>: System Settings > General > Sharing > Remote Login: ON for user <user>` |
+| `ssh-to-new` | Crea o reutiliza la clave origen→nuevo, verifica la huella, configura `known_hosts`, autoriza la clave y crea `fabric-<name>`. | Persona y agente | Huella en TTY: `Type the fingerprint shown on <name> (or yes): `; clave: `On <name> add the displayed public key to ~/.ssh/authorized_keys, then continue.` |
+| `runtimes` | Comprueba Homebrew, Node, Python, Herdr, Pi, gentle-pi y el servidor Herdr; con `--install-missing` intenta instalar sólo Herdr y gentle-pi cuando sus precondiciones ya existen. | Persona | `On <name>: install missing runtimes and log Pi in once from the GUI` |
+| `ssh-to-origin` | Configura el canal SSH inverso nuevo→origen, incluida la huella del origen y el alias remoto. | Agente | No espera a una persona. Un conflicto de huella o alias falla de forma segura. |
+| `mount` | En un `spoke`, copia la utilidad de montaje e instala el montaje SMB persistente usando `share` del registro. | Persona | `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password` |
+| `registry` | Descubre datos del nuevo host y escribe su entrada en `config/hosts.json`. | Agente | No espera a una persona. |
+| `skill` | Copia la skill `agent-fabric-remote` y su bloque bootstrap al Mac nuevo. | Agente | No espera a una persona. |
+| `auto-update` | Instala `fabric-update` y su LaunchAgent diario, salvo `--no-auto-update`. | Agente | No espera a una persona. |
+| `acceptance` | Ejecuta preflight en ambos sentidos y pruebas de aceptación Herdr + Pi. | Persona y agente | Si Pi no tiene sesión: `Log Pi in from the GUI on <target>` |
 
-Configure un canal **en cada dirección**: `host registrado → nuevo` y `nuevo → host registrado` (normalmente, el hub). Puede reutilizar una clave que ya funcione para un alias; para una dirección nueva use una clave dedicada. El procedimiento completo por dirección está en el [runbook del canal SSH](../runbooks/agent-fabric/ssh-channel.md).
+`<name>`, `<user>`, `<share.user>`, `<share.host>`, `<share.name>` y `<target>` son valores concretos sustituidos por el script.
 
-### 3.1 Clave, huella y autorización
+## Intervenciones de la persona
 
-**Agente — en el origen de cada dirección, después de autorización.** Cree una clave ed25519 dedicada sin sobrescribir una existente. Para el destino `studio-mac`:
+El proceso comprueba las condiciones cada **5 segundos**, hasta `--wait-timeout` minutos (30 por defecto). Tras la intervención no hay que pulsar nada: el proceso continúa al detectar la condición. Si vence el tiempo, o se usó `--no-wait`, termina con una pista para reanudar; volver a ejecutar el mismo comando conserva el estado.
 
-```sh
-if [ -e ~/.ssh/agent_fabric_studio_mac ] || [ -e ~/.ssh/agent_fabric_studio_mac.pub ]; then
-  echo 'La clave ya existe; no se modifica.' >&2
-else
-  ssh-keygen -t ed25519 -f ~/.ssh/agent_fabric_studio_mac -N '' -C agent-fabric-to-studio-mac
-fi
-```
+### Remote Login
 
-**Persona — delante de la pantalla local del destino.** Lea la huella del host **localmente en el destino**; puede comunicarla por un canal ya confiable:
+**El script muestra:** `On <name>: System Settings > General > Sharing > Remote Login: ON for user <user>`.
+
+**La persona hace:** en el Mac nuevo abre **System Settings → General → Sharing → Remote Login**, lo activa y autoriza a `<user>`. También confirma que la red elegida es la correcta.
+
+**Continúa cuando:** el puerto 22 responde desde el origen.
+
+### Huella del host
+
+**El script muestra:** en una terminal con TTY, `Type the fingerprint shown on <name> (or yes): `. Sin TTY no puede pedir confirmación y termina esperando, indicando `Re-run with --host-fingerprint SHA256:...`.
+
+**La persona hace:** en el Mac nuevo lee la huella local:
 
 ```sh
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-**STOP:** no acepte una clave de host ni autorice una clave pública hasta que la persona compare la huella local con el escaneo del origen.
+Compárela con la huella observada desde el origen. Puede pasar el valor ya verificado sin interacción con `--host-fingerprint SHA256:...`; en una TTY también puede escribir esa huella exacta o `yes` después de verificarla localmente. Nunca desactive `StrictHostKeyChecking`.
 
-**Cómo verificar:** en el origen, ejecute y compare visualmente ambos resultados:
+**Continúa cuando:** la huella entregada coincide con el escaneo SSH.
 
-```sh
-ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
-```
+### Autorizar la clave del origen
 
-Deben coincidir exactamente en tipo y huella.
+**El script muestra:** un comando de una línea que contiene la clave pública del origen con el prefijo `no-agent-forwarding,no-port-forwarding,no-X11-forwarding `.
 
-**Cómo reanudar:** sólo con coincidencia, el agente añade esa clave escaneada a `~/.ssh/known_hosts`; con diferencia, cancele el alta, investigue la red/nombre en el destino y repita la lectura local. Nunca use `StrictHostKeyChecking=no`.
+**La persona hace:** revisa y ejecuta exactamente ese comando en el Mac nuevo; crea `~/.ssh` con modo `700`, añade la línea restringida sólo si falta y deja `authorized_keys` con modo `600`.
 
-**Agente — en el destino, con aprobación ya dada.** Haga una copia de seguridad de `~/.ssh/authorized_keys` y agregue la clave pública del origen, sin reemplazar las líneas existentes. La línea agregada debe comenzar exactamente así, seguida de la clave pública original en una sola línea:
+**Continúa cuando:** la conexión por clave desde el origen funciona; el script la sondea automáticamente.
 
-```text
-no-agent-forwarding,no-port-forwarding,no-X11-forwarding
-```
+### Runtimes y login GUI
 
-**Verificación:** la copia de seguridad existe, la clave pública aparece una sola vez con esas restricciones y los permisos de SSH siguen siendo aceptados por macOS.
+**El script muestra:** `On <name>: install missing runtimes and log Pi in once from the GUI`.
 
-### 3.2 Alias del origen
+**La persona hace:** instala Homebrew, Node, Pi, gentle-pi y Herdr si faltan; abre Herdr y abre Pi en la sesión GUI para completar el login del proveedor. Claude no es requisito. Con `--install-missing`, el script sólo intenta `brew install herdr` si Homebrew ya responde y `pi install npm:gentle-pi` si Pi ya responde: no instala Homebrew, Node ni Pi.
 
-**Agente — en el origen.** Añada al `~/.ssh/config` local un bloque por destino (sustituya los marcadores):
+**Continúa cuando:** las comprobaciones remotas encuentran `brew`, `node`, `python3`, `herdr`, `pi`, gentle-pi y `herdr tab list` funciona.
 
-```sshconfig
-Host fabric-<target>
-  HostName <host>
-  User <user>
-  IdentityFile ~/.ssh/agent_fabric_<target>
-  IdentitiesOnly yes
-  BatchMode yes
-  StrictHostKeyChecking yes
-  ConnectTimeout 15
-  ServerAliveInterval 15
-  ServerAliveCountMax 4
-  ForwardAgent no
-```
+> Para SSH no interactivo, el script descubre directorios de herramientas habituales, incluido el `default` de `nvm` (o la versión Node instalada más alta), y usa ese `PATH` para las comprobaciones y herramientas posteriores.
 
-Si se reutiliza una clave que ya funciona, conserve su `IdentityFile` y cree sólo el alias con los demás controles. Repita 3.1 y 3.2 en sentido inverso, con otra clave dedicada si no hay una reutilizable.
+### Primer montaje SMB y Keychain
 
-**Verificación:** desde cada origen, `ssh fabric-<target> hostname` devuelve el nombre del destino sin prompt de contraseña ni aceptación interactiva de huella.
+**El script muestra:** `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password`.
 
-## 4. Montar el catálogo del hub en el spoke
+**La persona hace:** en la GUI del Mac nuevo abre Finder, se conecta a esa URL SMB, se autentica y guarda la contraseña en Keychain. La contraseña no se escribe en comandos, archivos ni logs.
 
-**Persona — en la sesión GUI del spoke.** Conéctese primero desde Finder a `smb://<share.host>/<share.name>`, autentíquese como `<share.user>` y marque **«Recordar contraseña en el llavero»**. Los tres valores se leen de `share` en `config/hosts.json` del hub.
+**Continúa cuando:** el montaje está disponible y el catálogo se ve en `/Volumes/<share.name>`.
 
-**STOP:** la contraseña SMB y el acceso al llavero son exclusivamente humanos y GUI.
+### Login de Pi durante la aceptación
 
-**Cómo verificar:** Finder muestra el recurso esperado y la carpeta del repositorio bajo `/Volumes/<share.name>`.
+**El script muestra:** `Log Pi in from the GUI on <target>` cuando la aceptación recibe `Not logged in`.
 
-**Cómo reanudar:** si la conexión falla, confirme la publicación del recurso y las credenciales en Finder; no ponga contraseñas en comandos ni archivos. Cuando Finder funcione, continúe.
+**La persona hace:** abre Pi en la GUI del host indicado, inicia sesión con el proveedor y confirma una consulta inocua.
 
-**Agente — en el spoke, después de la conexión GUI.** Instale el montaje persistente con los valores exactos del registro:
+**Continúa cuando:** vuelva a ejecutarse el mismo comando después del login. La condición de esa espera no se puede sondear automáticamente; la reanudación ejecuta otra vez la aceptación.
 
-```sh
-python3 <repo>/automation/agent-fabric/bin/fabric-smb-mount mount \
-  --host <share.host> --share <share.name> --user <share.user> --persistent
-```
+## Opciones, estado y diagnóstico
 
-**Verificación:** la salida JSON indica `mounted: true`; el repo se ve en la raíz `catalog_root` que se registrará. El montaje persistente permite recuperarlo después de iniciar sesión; sigue dependiendo del llavero de la sesión GUI.
-
-## 5. Registrar el equipo en el hub
-
-**Agente — en el clon del repositorio del hub.** Añada el nuevo host a `config/hosts.json`; no cambie la sección `share` al agregar un spoke. Complete todos los campos:
-
-| Campo | Significado |
+| Opción | Uso |
 | --- | --- |
-| `hostname_prefix` | Prefijo de `LocalHostName`/`hostname` usado para identificar el host. |
-| `role` | `hub` para quien publica proyectos; `spoke` para quien los monta. El nuevo Mac de este flujo es `spoke`. |
-| `ssh_alias` | Alias local del destino: `fabric-<name>`. |
-| `catalog_root` | Raíz local del catálogo: en un spoke, normalmente el punto SMB `/Volumes/<share.name>`. |
-| `repo` | Ruta local de este repositorio en ese host, bajo `catalog_root` en un spoke. |
-| `path` | PATH saneado que permite localizar Python, Pi y Herdr al ejecutar remotamente. |
-| `gui_cwd` | Directorio de trabajo existente y permitido para la tab GUI que crea Herdr. |
-| `runtimes` | Runtimes declarados: incluya `pi`; `claude` sólo si se ofrece opcionalmente. |
+| `--name`, `--address`, `--user` | Obligatorios: nombre de registro, dirección y cuenta del nuevo Mac. |
+| `--role {hub,spoke}` | Rol del nuevo host; el predeterminado es `spoke`. |
+| `--host-fingerprint SHA256:...` | Huella previamente verificada; evita la pregunta de TTY. |
+| `--origin-user USER` | Cuenta que usará el canal inverso hacia el origen. |
+| `--install-missing` | Intenta instalar sólo Herdr y gentle-pi cuando Homebrew/Pi ya existen. |
+| `--auto-update` / `--no-auto-update` | Activa (predeterminado) o omite el LaunchAgent diario. |
+| `--update-time HH:MM` | Hora diaria; el predeterminado es `04:30`. |
+| `--skip-live` | Omite las pruebas de tareas vivas de aceptación, pero conserva los preflight. |
+| `--dry-run` | No escribe estado ni configuración; informa qué fases cambiarían y devuelve `4` si habría cambios. |
+| `--no-wait` | No espera intervención humana: guarda la fase como pendiente y devuelve `10`. |
+| `--wait-timeout MINUTOS` | Límite de espera; de 0 a 1440, predeterminado 30. |
+| `--verbose` | Añade comandos, códigos de salida y salida recortada al diagnóstico. |
+| `--registry RUTA` | Usa un registro alternativo. |
 
-Ejemplo ficticio de spoke (adapte rutas, usuario y PATH):
+Códigos de salida: `0` completado o ya configurado; `1` error de setup o error inesperado; `2` entrada inválida o ejecución como root; `4` `--dry-run` detectó cambios; `10` espera una acción humana o venció la espera.
 
-```json
-"studio-mac": {
-  "hostname_prefix": "StudioMac",
-  "role": "spoke",
-  "ssh_alias": "fabric-studio-mac",
-  "catalog_root": "/Volumes/agent-projects",
-  "repo": "/Volumes/agent-projects/leo/mac-agent-fabric",
-  "path": "/opt/homebrew/bin:/usr/bin:/bin",
-  "gui_cwd": "/Users/leo/tmp",
-  "runtimes": ["pi"]
-}
-```
-
-Valide antes de cerrar el cambio:
+Consulte el estado persistido con:
 
 ```sh
-automation/agent-fabric/bin/fabric-delegate list
+automation/agent-fabric/bin/fabric-setup status --name <name>
 ```
 
-Después, haga el commit del registro **en el hub** según el flujo de Git aprobado. El spoke verá esa versión mediante SMB.
+El estado está en `~/.local/state/agent-fabric/setup/<name>.json` y el log en `~/Library/Logs/mac-agent-fabric/fabric-setup-<name>.log`. Ante un error inesperado, repita con `--verbose`, consulte ese log y conserve sólo diagnóstico saneado. La salida normal es resumida en inglés; `--verbose` registra cada comando y su resultado recortado.
 
-**Verificación:** `list` incluye el nuevo nombre, alias y rol esperados; el commit queda disponible para los hosts que consumen el catálogo compartido.
+Volver a ejecutar el comando contra un host ya configurado es seguro: las fases que ya cumplen su condición informan `OK` y no cambian configuración. Un nombre existente con otra dirección, una huella distinta o un alias SSH diferente falla en vez de sobrescribirlo.
 
-## 6. Instalar skill y bootstrap en cada host
+## Procedimiento manual (referencia)
 
-**Agente — en el hub.** Cree un enlace simbólico desde `~/.pi/agent/skills/agent-fabric-remote` al directorio `skills/agent-fabric-remote` del repositorio local. Opcionalmente, cree el enlace equivalente en `~/.claude/skills/`.
+Use este apéndice sólo para diagnosticar una fase que no pueda completarse con `fabric-setup`.
 
-**Agente — en cada spoke.** Copie `skills/agent-fabric-remote` al directorio local `~/.pi/agent/skills/agent-fabric-remote`; opcionalmente también a `~/.claude/skills/`. Las skills **no** se comparten por SMB: recópielas después de cada cambio de la skill. Conserve copias antiguas fuera de directorios de skills para que no sean cargadas.
-
-**Agente — en cada host, con la ruta `repo` de ese host.** Instale una vez el contenido de `skills/agent-fabric-remote/assets/bootstrap-block.md` en `~/.pi/agent/AGENTS.md`, reemplazando `<REPO_PATH>` por el valor local de `repo`. Opcionalmente repita en `~/.claude/CLAUDE.md`. Si ya existen los marcadores `BEGIN/END AGENT-FABRIC-REMOTE-BOOTSTRAP`, reemplace sólo el bloque entre ellos; nunca lo duplique.
-
-**Verificación:** una búsqueda de los marcadores devuelve exactamente un bloque por archivo de bootstrap, su ruta de repositorio es local a ese host y sólo existe una instalación activa de la skill por runtime.
-
-## 7. Aceptación bidireccional
-
-**Agente — desde el hub.** Ejecute:
-
-```sh
-automation/agent-fabric/bin/fabric-delegate preflight <new>
-```
-
-**Agente — desde el Mac nuevo.** Ejecute contra el hub:
-
-```sh
-<repo>/automation/agent-fabric/bin/fabric-delegate preflight <hub>
-```
-
-**Verificación:** ambos preflight identifican un host registrado, alcanzable y con catálogo disponible. Si aparece `catalog_missing`, vuelva al paso 4.
-
-**Persona — en ambos Macs.** Abra una Pi nueva en cada lado y asegúrese de que las pestañas existentes quedan registradas como línea base.
-
-**STOP:** abrir Herdr/Pi en la sesión GUI, aprobar permisos del proveedor y observar pestañas son acciones humanas; no cierre pestañas ajenas.
-
-**Cómo verificar:** en una Pi nueva de cada lado, pida en lenguaje natural: `Pedile a la Pi de <name> que responda exactamente ACCEPT_<hex> y nada más`. El resultado debe contener exactamente el token solicitado. Después compruebe que las pestañas del destino volvieron a la línea base.
-
-**Cómo reanudar:** si falta login, vuelva al paso 2; si falla preflight, vuelva a los pasos 3–5; si hay una tarea ambigua, use `recover` con el mismo `task_id`, no envíe un token nuevo ni cierre recursos ajenos.
+1. En el Mac nuevo, active Remote Login para la cuenta elegida y prepare Homebrew, Node, Pi, gentle-pi y Herdr; complete el login de Pi y abra Herdr en la GUI.
+2. Configure ambas direcciones SSH con clave dedicada, huella local verificada, `known_hosts`, `authorized_keys` restringido y alias `fabric-<target>`. Siga el [runbook del canal SSH](../runbooks/agent-fabric/ssh-channel.md).
+3. En Finder del spoke, realice el primer acceso SMB, guarde la contraseña en Keychain e instale el montaje persistente. Siga [Montaje SMB](../runbooks/agent-fabric/smb-mount.md).
+4. Registre el host con los valores locales correctos, instale la skill y el bloque bootstrap, valide preflight en ambos sentidos y haga el commit del registro según el flujo aprobado.
 
 ## Reversión
 
-**Agente — con autorización del propietario de cada host.** Retire, en orden y sólo los artefactos de este alta: la entrada del registro y su commit en el hub; los bloques de alias SSH; las líneas añadidas a `authorized_keys` (restaure la copia de seguridad si sólo contiene este cambio); las claves dedicadas; y en el spoke:
-
-```sh
-python3 <repo>/automation/agent-fabric/bin/fabric-smb-mount unmount \
-  --host <share.host> --share <share.name> --user <share.user> --remove-persistent
-```
-
-Retire la skill instalada o enlace y el bloque bootstrap marcado, sin tocar otras skills ni bloques. Una persona confirma antes de eliminar un artefacto compartido o una copia de seguridad que pudiera contener cambios ajenos.
+`fabric-setup` no ofrece un subcomando de reversión. Con autorización del propietario, retire sólo los artefactos creados para este alta: la entrada y el commit del registro, aliases y claves SSH dedicadas, las líneas autorizadas añadidas, la skill/bootstrap del host nuevo y el montaje SMB persistente. No borre claves reutilizadas, copias de seguridad ni entradas que contengan cambios ajenos. Para los procedimientos precisos consulte [Canal SSH](../runbooks/agent-fabric/ssh-channel.md#reversión-por-dirección) y [Montaje SMB](../runbooks/agent-fabric/smb-mount.md).
 
 ## Problemas frecuentes
 
 | Síntoma | Acción segura |
 | --- | --- |
-| `unreachable` (salida 3) | El otro Mac está apagado o no es alcanzable. Compruebe red, energía, Remote Login y alias; recupere después, no cree una tarea nueva ante ambigüedad. |
-| `catalog_missing` | En un spoke falta el montaje o no contiene el catálogo. Vuelva a Finder y al paso 4; use `--persistent`. |
-| `UNSUPPORTED_HOST` | El nombre no está en el registro que usa el comando. Revise y publique `config/hosts.json`; no invente rutas ni aliases. |
-| Límite de nombre de agente Herdr | El adaptador ya adapta los nombres a los límites de Herdr; use el nombre de registro normal. |
-| `Not logged in` | El proveedor de Pi sólo quedó autenticado fuera de la sesión GUI o no está autenticado. Inicie sesión desde la GUI; `claude-bridge` necesita su Keychain GUI. |
-| El montaje se pierde | Confirme el llavero desde Finder y vuelva a montar con `--persistent`. |
+| `Not logged in` | Inicie sesión en Pi desde la **GUI** del host indicado; no intente autenticarlo por SSH. Después reejecute el mismo comando. |
+| El script espera runtimes aunque Pi funciona en Terminal | Revise la versión `nvm` predeterminada o instalada y que sus directorios sigan existiendo; el script la descubre para SSH no interactivo. |
+| La huella no coincide | Detenga el alta. Compare de nuevo la lectura local y el escaneo de red; no use `StrictHostKeyChecking=no`. |
+| El comando de autorización falla | Revise que se ejecutó completo en el Mac nuevo y que no se modificó la clave pública restringida que imprimió el script. |
+| El montaje SMB no aparece | Conéctese primero desde Finder, guarde la contraseña en Keychain y siga el runbook SMB; no ponga la contraseña en la terminal. |
+| El nombre ya existe con otra dirección | No se sobrescribe: corrija la decisión de registro o use el host correcto. |
 
 ## Referencias
 
+- [Actualización automática](../runbooks/agent-fabric/auto-update.md)
 - [Canal SSH bidireccional](../runbooks/agent-fabric/ssh-channel.md)
 - [Montaje SMB entre equipos](../runbooks/agent-fabric/smb-mount.md)
-- [Tareas Pi mediante Herdr](../runbooks/agent-fabric/herdr-tasks.md)

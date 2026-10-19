@@ -24,8 +24,8 @@ Es el canal verificado de punta a punta en ambas direcciones. Un agente de un Ma
 | Documento | Para qué |
 |---|---|
 | [Arquitectura](docs/architecture.md) | Topología, límites y entregables (autoritativo) |
-| [Agregar un equipo al canal Agent Fabric](docs/setup/add-host.md) | Alta genérica de un Mac como spoke del hub Herdr + Pi |
-| [Instalación guiada por agente](docs/setup/agent-guided-setup.md) | Secuencia de instalación con pausas humanas |
+| [Agregar un equipo al canal Agent Fabric](docs/setup/add-host.md) | Alta canónica con `fabric-setup` de un Mac como spoke del hub Herdr + Pi |
+| [Instalación guiada por agente](docs/setup/agent-guided-setup.md) | Referencia v1; para un alta Herdr + Pi nueva use `fabric-setup` |
 | [Setup MacBook](docs/setup/macbook.md) / [Setup Mac mini](docs/setup/mac-mini.md) | Pasos por host |
 | [Tareas Herdr + Pi](docs/runbooks/agent-fabric/herdr-tasks.md) | Cómo funciona y cómo se usa el adaptador `fabric-herdr-task` |
 | [Actualización automática](docs/runbooks/agent-fabric/auto-update.md) | `fabric-update`, calendario diario y mantenimiento local sin sudo |
