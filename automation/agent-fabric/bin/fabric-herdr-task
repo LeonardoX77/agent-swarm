@@ -16,6 +16,7 @@ def main():
     parser.add_argument('--state-dir')
     parser.add_argument('--project-root')
     parser.add_argument('--herdr')
+    parser.add_argument('--registry')
     parser.add_argument('--timeout', type=int, default=30)
     parser.add_argument('--wait', default='120')
     args = parser.parse_args()
@@ -26,7 +27,7 @@ def main():
             raise TaskError('INVALID_WAIT') from error
         if not 0 <= wait <= 900:
             raise TaskError('INVALID_WAIT')
-        controller = Controller(args.state_dir, herdr=args.herdr, project_root=args.project_root, timeout=args.timeout)
+        controller = Controller(args.state_dir, herdr=args.herdr, project_root=args.project_root, registry=args.registry, timeout=args.timeout)
         if args.action == 'submit':
             if args.task_id is not None:
                 raise TaskError('SUBMIT_STDIN_ONLY')

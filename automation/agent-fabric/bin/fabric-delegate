@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Delegate a Herdr task to a named Agent Fabric host over SSH."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1] / 'lib'))
+from host_registry import HostRegistry, RegistryError
+
+SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4']
+
+
+def _json(value, stdout):
+    print(json.dumps(value, sort_keys=True), file=stdout)
+
+
+def _task_id(value):
+    try:
+        parsed = str(uuid.UUID(value))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError('INVALID_INPUT') from error
+    if parsed != value:
+        raise ValueError('INVALID_INPUT')
+    return value
+
+
+def _wait(value):
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError('INVALID_INPUT') from error
+    if not 0 <= result <= 900:
+        raise ValueError('INVALID_INPUT')
+    return result
+
+
+def _remote_command(host, action, remote_args):
+    adapter = host['repo'] + '/automation/agent-fabric/bin/fabric-herdr-task'
+    parts = ['PATH=' + shlex.quote(host['path']), shlex.quote('/usr/bin/python3'), shlex.quote(adapter), shlex.quote(action)]
+    parts.extend(shlex.quote(argument) for argument in remote_args)
+    return ' '.join(parts)
+
+
+def _ssh(host, command, runner, input=None):
+    return runner(['ssh', *SSH_OPTIONS, host['ssh_alias'], command], input=input, text=True, capture_output=True, shell=False)
+
+
+def _target(registry, nodename, name):
+    try:
+        host = registry.get(name)
+    except KeyError as error:
+        raise ValueError('INVALID_INPUT') from error
+    current = registry.self_host(nodename)
+    if current and current['name'] == name:
+        raise ValueError('SELF_TARGET')
+    return host
+
+
+def main(argv=None, *, runner=subprocess.run, registry=None, nodename=None, stdin=None, stdout=None):
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--registry')
+    parser.add_argument('action', choices=('list', 'self', 'preflight', 'submit', 'recover', 'close'))
+    parser.add_argument('target', nargs='?')
+    parser.add_argument('task_id', nargs='?')
+    parser.add_argument('--wait', default='120')
+    try:
+        args = parser.parse_args(argv)
+        registry = registry or HostRegistry(args.registry)
+        node = nodename if nodename is not None else os.uname().nodename
+        current = registry.self_host(node)
+        if args.action == 'list':
+            if args.target or args.task_id:
+                raise ValueError('INVALID_INPUT')
+            hosts = []
+            for name in sorted(registry.hosts):
+                host = registry.get(name)
+                hosts.append({'name': name, 'role': host['role'], 'ssh_alias': host['ssh_alias'], 'runtimes': host['runtimes'], 'self': bool(current and current['name'] == name)})
+            _json({'hosts': hosts, 'self': current['name'] if current else None}, stdout)
+            return 0
+        if args.action == 'self':
+            if args.target or args.task_id or not current:
+                raise ValueError('INVALID_INPUT')
+            _json({'name': current['name'], 'role': current['role'], 'ssh_alias': current['ssh_alias'], 'runtimes': current['runtimes']}, stdout)
+            return 0
+        if not args.target:
+            raise ValueError('INVALID_INPUT')
+        host = _target(registry, node, args.target)
+        if args.action == 'preflight':
+            if args.task_id:
+                raise ValueError('INVALID_INPUT')
+            adapter = host['repo'] + '/automation/agent-fabric/bin/fabric-herdr-task'
+            command = 'test -x %s && test -d %s' % (shlex.quote(adapter), shlex.quote(host['catalog_root']))
+            completed = _ssh(host, command, runner)
+            if completed.returncode == 0:
+                _json({'status': 'ready', 'target': args.target}, stdout)
+                return 0
+            if completed.returncode == 255:
+                _json({'status': 'unreachable', 'target': args.target, 'resubmit_hint': 'recover or re-run submit with the identical envelope'}, stdout)
+                return 3
+            if host['role'] == 'spoke':
+                _json({'status': 'catalog_missing', 'target': args.target, 'hint': 'run fabric-smb-mount mount on that host'}, stdout)
+                return 1
+            _json({'status': 'preflight_failed', 'target': args.target}, stdout)
+            return 1
+        if args.action == 'submit':
+            if args.task_id:
+                raise ValueError('INVALID_INPUT')
+            remote_args = []
+            input_value = stdin.read()
+        else:
+            if not args.task_id:
+                raise ValueError('INVALID_INPUT')
+            task = _task_id(args.task_id)
+            remote_args = [task]
+            input_value = None
+            if args.action == 'recover':
+                remote_args.extend(['--wait', str(_wait(args.wait))])
+            elif args.wait != '120':
+                raise ValueError('INVALID_INPUT')
+        completed = _ssh(host, _remote_command(host, args.action, remote_args), runner, input_value)
+        if completed.returncode == 255:
+            _json({'status': 'unreachable', 'target': args.target, 'resubmit_hint': 'recover or re-run submit with the identical envelope'}, stdout)
+            return 3
+        if completed.returncode != 0:
+            _json({'status': 'failed', 'diagnostic_code': 'REMOTE_FAILURE', 'target': args.target}, stdout)
+            return 1
+        stdout.write(completed.stdout)
+        return 0
+    except ValueError as error:
+        code = str(error) if str(error) == 'SELF_TARGET' else 'INVALID_INPUT'
+        _json({'status': 'failed', 'diagnostic_code': code}, stdout)
+        return 2
+    except (RegistryError, TypeError, OSError):
+        _json({'status': 'failed', 'diagnostic_code': 'INVALID_INPUT'}, stdout)
+        return 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

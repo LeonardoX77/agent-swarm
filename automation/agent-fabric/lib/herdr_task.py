@@ -11,9 +11,9 @@ from pathlib import Path
 
 from herdr_ledger import Ledger, LedgerConflict, LedgerError
 from pi_session_result import SessionError, parse_session_result
+from host_registry import HostRegistry
 
 _FIELDS = {'task_id', 'origin_host', 'project', 'goal', 'acceptance', 'mode'}
-_HOST_ROOTS = {'MacMiniLeo': Path('/Volumes/agent-projects'), 'MacBookLeo': Path('/Users/leo/projects')}
 
 
 class TaskError(ValueError):
@@ -67,10 +67,15 @@ def _envelope(value):
 
 
 class Controller:
-    def __init__(self, state_dir=None, *, herdr=None, project_root=None, hostname=None, gui_cwd='/Users/leo/tmp', timeout=30, run=None):
+    def __init__(self, state_dir=None, *, herdr=None, project_root=None, hostname=None, gui_cwd=None, registry=None, timeout=30, run=None):
         self.hostname = hostname or os.uname().nodename
         self.timeout = timeout
-        self.gui_cwd = _safe_absolute(gui_cwd)
+        self.registry = registry if isinstance(registry, HostRegistry) else HostRegistry(registry)
+        self.host = self.registry.self_host(self.hostname)
+        selected_gui_cwd = gui_cwd if gui_cwd is not None else (self.host['gui_cwd'] if self.host else project_root)
+        if selected_gui_cwd is None:
+            raise TaskError('UNSUPPORTED_HOST')
+        self.gui_cwd = _safe_absolute(selected_gui_cwd)
         if not self.gui_cwd.is_dir():
             raise TaskError('UNSAFE_GUI_CWD')
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 300:
@@ -102,10 +107,9 @@ class Controller:
             if not path.is_dir():
                 raise TaskError('INVALID_PROJECT')
             return path
-        root = next((root for prefix, root in _HOST_ROOTS.items() if self.hostname.startswith(prefix)), None)
-        if root is None:
+        if self.host is None:
             raise TaskError('UNSUPPORTED_HOST')
-        return _safe_absolute(root)
+        return _safe_absolute(self.host['catalog_root'])
 
     def _call(self, argv):
         try:

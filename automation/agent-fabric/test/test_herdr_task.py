@@ -267,8 +267,11 @@ class HerdrTaskTests(unittest.TestCase):
             self.assertEqual(Controller(state, herdr=link, project_root=catalog, hostname='OtherHost', gui_cwd=gui, run=fake).submit(ENVELOPE)['status'], 'submitted')
             default_task = {**ENVELOPE, 'task_id': '550e8400-e29b-41d4-a716-446655440003'}
             default_session = root / 'state-default' / 'sessions' / default_task['task_id'] / 'session.jsonl'
-            with patch.dict(herdr_task._HOST_ROOTS, {'MacMiniLeo': catalog}, clear=True):
-                self.assertEqual(Controller(root / 'state-default', herdr=binary, hostname='MacMiniLeo-test', gui_cwd=gui, run=Herdr(default_session)).submit(default_task)['status'], 'submitted')
+            registry = root / 'hosts.json'
+            registry.write_text(json.dumps({'version': 1, 'hub': 'mini', 'share': {'host': 'hub.local', 'name': 'projects', 'user': 'leo'}, 'hosts': {'mini': {'hostname_prefix': 'MacMiniLeo', 'role': 'hub', 'ssh_alias': 'fabric-mini', 'catalog_root': str(catalog), 'repo': str(root), 'path': '/usr/bin:/bin', 'gui_cwd': str(gui), 'runtimes': ['pi']}}}))
+            default = Controller(root / 'state-default', herdr=binary, hostname='MacMiniLeo-test', registry=registry, run=Herdr(default_session))
+            self.assertEqual(default.gui_cwd, gui.resolve())
+            self.assertEqual(default.submit(default_task)['status'], 'submitted')
             missing = {**ENVELOPE, 'task_id': '550e8400-e29b-41d4-a716-446655440001', 'project': 'leo/missing'}
             with self.assertRaises(TaskError): Controller(root / 'state2', herdr=binary, project_root=catalog, hostname='OtherHost', gui_cwd=gui, run=lambda *_a, **_k: None).submit(missing)
             (catalog / 'escape').symlink_to(root, target_is_directory=True)
