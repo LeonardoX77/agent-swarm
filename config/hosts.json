@@ -16,7 +16,10 @@
       "repo": "/Users/leo/projects/leo/mac-agent-fabric",
       "path": "/opt/homebrew/bin:/usr/bin:/bin",
       "gui_cwd": "/Users/leo/tmp",
-      "runtimes": ["pi", "claude"]
+      "runtimes": [
+        "pi",
+        "claude"
+      ]
     },
     "mac-mini": {
       "hostname_prefix": "MacMiniLeo",
@@ -25,9 +28,12 @@
       "address": "MacMiniLeo.local",
       "catalog_root": "/Volumes/agent-projects",
       "repo": "/Volumes/agent-projects/leo/mac-agent-fabric",
-      "path": "/opt/homebrew/bin:/Users/leo/.nvm/versions/node/v24.19.0/bin:/usr/bin:/bin",
+      "path": "/opt/homebrew/bin:/Users/leo/.nvm/versions/node/v24.19.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       "gui_cwd": "/Users/leo/tmp",
-      "runtimes": ["pi"]
+      "runtimes": [
+        "pi",
+        "claude"
+      ]
     }
   }
 }
