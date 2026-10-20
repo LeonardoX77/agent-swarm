@@ -102,6 +102,19 @@ class FabricDelegateTests(unittest.TestCase):
             code, result = self.invoke(argv, run)
             self.assertEqual((code, result['diagnostic_code']), (2, 'INVALID_INPUT'))
 
+    def test_remote_json_failure_is_preserved_with_target(self):
+        run = self.runner(returncode=1, stdout='{"status":"failed","diagnostic_code":"INVALID_ENVELOPE"}\n')
+        code, result = self.invoke(['submit', 'mac-mini'], run, '{}')
+        self.assertEqual((code, result), (1, {'status': 'failed', 'diagnostic_code': 'INVALID_ENVELOPE', 'target': 'mac-mini'}))
+
+    def test_nonjson_remote_failure_includes_trimmed_output(self):
+        run = self.runner(returncode=1, stdout='out-' + ('x' * 600), stderr='err-' + ('y' * 600))
+        code, result = self.invoke(['submit', 'mac-mini'], run, '{}')
+        self.assertEqual((code, result['status'], result['diagnostic_code'], result['target'], result['remote_exit']),
+                         (1, 'failed', 'REMOTE_FAILURE', 'mac-mini', 1))
+        self.assertEqual(len(result['remote_stdout']), 500)
+        self.assertEqual(len(result['remote_stderr']), 500)
+
     def test_unreachable_preflight_hint_and_self_target_are_typed(self):
         run = self.runner(returncode=255)
         code, result = self.invoke(['submit', 'mac-mini'], run, '{}')

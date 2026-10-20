@@ -57,8 +57,9 @@ class SetupTests(unittest.TestCase):
         now = [0]
         def sleep(seconds): now[0] += seconds
         uid = kwargs.pop("uid", 501)
+        output = kwargs.pop("output", io.StringIO())
         return Setup("new-mac", "New.local", "leo", registry=Registry(), runner=runner, home=home,
-                     nodename="Origin.local", tty=False, uid=uid, output=io.StringIO(),
+                     nodename="Origin.local", tty=False, uid=uid, output=output,
                      sleep=sleep, clock=lambda: now[0], **kwargs)
 
     def test_default_runner_runs_commands_once(self):
@@ -169,17 +170,51 @@ class SetupTests(unittest.TestCase):
     def test_acceptance_is_bidirectional(self):
         """RED for D5/S5: both directions must submit an acceptance task."""
         setup = self.make(); setup.origin = setup.registry.get("origin")
-        setup.registry._hosts["new-mac"] = dict(setup.origin, name="new-mac", repo="/Volumes/projects/org/repo")
-        calls = []; nonces = []
+        setup.registry._hosts["new-mac"] = dict(setup.origin, name="new-mac", catalog_root="/Volumes/projects", repo="/Volumes/projects/org/repo")
+        calls = []; nonces = []; envelopes = []
         def command(argv, timeout=45, input=None):
             calls.append(argv)
             if input:
-                nonces.append(json.loads(input)["goal"].split()[3])
+                envelope = json.loads(input); envelopes.append(envelope)
+                nonces.append(envelope["goal"].split()[3])
             if "recover" in " ".join(argv): return Result(out=nonces[-1])
             return Result()
         setup.command = command; setup.remote = lambda command, timeout=60, input=None: Result()
         self.assertEqual(setup.acceptance()[0], "ok")
         self.assertTrue(any(argv[:2] == ["ssh", "fabric-new-mac"] for argv in calls), "remote direction was not submitted")
+        self.assertEqual([set(value) for value in envelopes], [{"task_id", "origin_host", "project", "goal", "acceptance", "mode"}] * 2)
+        self.assertEqual([value["origin_host"] for value in envelopes], ["origin", "new-mac"])
+        self.assertEqual([value["project"] for value in envelopes], ["org/repo", "org/repo"])
+        self.assertTrue(all(value["acceptance"] == "Return the exact nonce." and value["mode"] == "executor" for value in envelopes))
+
+    def test_acceptance_login_hint_exits_without_polling_submit(self):
+        setup = self.make(); setup.origin = setup.registry.get("origin")
+        setup.registry._hosts["new-mac"] = dict(setup.origin, name="new-mac", catalog_root="/Volumes/projects", repo="/Volumes/projects/org/repo")
+        setup.command = lambda argv, timeout=45, input=None: Result(1, "Not logged in") if input else Result()
+        setup.wait_for = lambda *args: self.fail("login cannot safely be polled")
+        with self.assertRaisesRegex(Waiting, "Log Pi in from the GUI on new-mac"):
+            setup.acceptance()
+
+    def test_acceptance_nonlogin_failure_reports_remote_diagnostic(self):
+        setup = self.make(); setup.origin = setup.registry.get("origin")
+        setup.registry._hosts["new-mac"] = dict(setup.origin, name="new-mac", catalog_root="/Volumes/projects", repo="/Volumes/projects/org/repo")
+        setup.command = lambda argv, timeout=45, input=None: Result(1, '{"status":"failed","diagnostic_code":"INVALID_ENVELOPE"}') if input else Result()
+        with self.assertRaisesRegex(SetupError, "INVALID_ENVELOPE") as raised:
+            setup.acceptance()
+        self.assertIn("remote output", str(raised.exception))
+
+    def test_emit_flushes_console_and_log(self):
+        class Stream(io.StringIO):
+            def __init__(self): super().__init__(); self.flushes = 0
+            def flush(self): self.flushes += 1; super().flush()
+        output = Stream(); setup = self.make(output=output)
+        setup.emit("progress")
+        self.assertGreaterEqual(output.flushes, 1)
+        self.assertIn("progress\n", setup.log_path.read_text())
+
+    def test_setup_cli_configures_line_buffered_stdout(self):
+        script = Path(__file__).parents[1] / "bin" / "fabric-setup"
+        self.assertIn("reconfigure(line_buffering=True)", script.read_text())
 
 
 if __name__ == "__main__": unittest.main()

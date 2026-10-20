@@ -140,7 +140,17 @@ def main(argv=None, *, runner=subprocess.run, registry=None, nodename=None, stdi
             _json({'status': 'unreachable', 'target': args.target, 'resubmit_hint': 'recover or re-run submit with the identical envelope'}, stdout)
             return 3
         if completed.returncode != 0:
-            _json({'status': 'failed', 'diagnostic_code': 'REMOTE_FAILURE', 'target': args.target}, stdout)
+            try:
+                remote = json.loads((completed.stdout or '').strip())
+            except (TypeError, ValueError):
+                remote = None
+            if isinstance(remote, dict):
+                remote['target'] = args.target
+                _json(remote, stdout)
+            else:
+                _json({'status': 'failed', 'diagnostic_code': 'REMOTE_FAILURE', 'target': args.target,
+                       'remote_exit': completed.returncode, 'remote_stderr': (completed.stderr or '').strip()[:500],
+                       'remote_stdout': (completed.stdout or '').strip()[:500]}, stdout)
             return 1
         stdout.write(completed.stdout)
         return 0

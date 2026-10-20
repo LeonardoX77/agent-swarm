@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "lib"))
 from fabric_setup import Setup
+from herdr_task import TaskError, _envelope
 from host_registry import HostRegistry
 
 
@@ -111,7 +112,11 @@ class FakeMacs:
             self.update_calls.append(command); self.update_installed = True; return Result()
         if "fabric-delegate" in command:
             if " submit " in command:
-                self.nonces.append(json.loads(program)["goal"].split()[3]); return Result(out="submitted")
+                try:
+                    envelope = _envelope(json.loads(program))
+                except (TaskError, ValueError, TypeError):
+                    return Result(2, json.dumps({"status": "failed", "diagnostic_code": "INVALID_ENVELOPE"}))
+                self.nonces.append(envelope["goal"].split()[3]); return Result(out="submitted")
             if " recover " in command: return Result(out="ACCEPT_wrong" if self.nonce_mismatch else self.nonces[-1])
             return Result(out="closed")
         if command.startswith("mkdir -p ") and " && mv " in command:
@@ -158,7 +163,11 @@ class FakeMacs:
             return Result()
         if "fabric-delegate" in text:
             if " submit " in text:
-                self.nonces.append(json.loads(program)["goal"].split()[3]); return Result(out="submitted")
+                try:
+                    envelope = _envelope(json.loads(program))
+                except (TaskError, ValueError, TypeError):
+                    return Result(2, json.dumps({"status": "failed", "diagnostic_code": "INVALID_ENVELOPE"}))
+                self.nonces.append(envelope["goal"].split()[3]); return Result(out="submitted")
             if " recover " in text: return Result(out="ACCEPT_wrong" if self.nonce_mismatch else self.nonces[-1])
             return Result(out="closed")
         raise AssertionError("unrecognized local command: %r" % argv)

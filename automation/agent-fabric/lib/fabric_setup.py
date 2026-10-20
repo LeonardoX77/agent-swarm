@@ -87,21 +87,28 @@ class Setup:
 
     def _log(self, text):
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.log_path.open("a", encoding="utf-8") as log: log.write(text + "\n")
+        with self.log_path.open("a", encoding="utf-8") as log:
+            log.write(text + "\n")
+            log.flush()
 
     def emit(self, text):
         self.output.write(text + "\n")
+        self.output.flush()
         self._log(text)
 
     def command(self, argv, timeout=45, input=None):
         rendered = "$ " + " ".join(shlex.quote(str(x)) for x in argv)
         self._log(rendered)
-        if self.verbose: self.output.write(rendered + "\n")
+        if self.verbose:
+            self.output.write(rendered + "\n")
+            self.output.flush()
         try: result = self.runner(argv, timeout=timeout, text=True, capture_output=True, input=input)
         except (OSError, subprocess.TimeoutExpired) as error: result = type("Result", (), {"returncode": 1, "stdout": "", "stderr": str(error)})()
         detail = "exit %s: %s" % (result.returncode, ((result.stdout or "") + (result.stderr or "")).strip()[:1000])
         self._log(detail)
-        if self.verbose: self.output.write(detail + "\n")
+        if self.verbose:
+            self.output.write(detail + "\n")
+            self.output.flush()
         return result
 
     def remote(self, command, timeout=60, input=None):
@@ -436,16 +443,33 @@ if n!=s:
         if self.remote_tool(shlex.quote(remote_delegate) + " preflight " + shlex.quote(self.origin["name"])).returncode: raise SetupError("Remote preflight failed")
         if self.skip_live or (self.state["phases"].get("acceptance", {}).get("status") == "ok" and not self.changed): return self.result("skipped", "live acceptance skipped")
         # Delegates own task lifecycle; reject every response that does not return the nonce.
+        new_host = self.registry.get(self.name)
         directions = (
-            (self.name, [str(local), "submit", self.name], [str(local), "recover", self.name], [str(local), "close", self.name]),
-            (self.origin["name"], ["ssh", "fabric-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " submit " + shlex.quote(self.origin["name"]))],
+            (self.name, self.origin["name"], os.path.relpath(self.origin["repo"], self.origin["catalog_root"]),
+             [str(local), "submit", self.name], [str(local), "recover", self.name], [str(local), "close", self.name]),
+            (self.origin["name"], self.name, os.path.relpath(new_host["repo"], new_host["catalog_root"]),
+             ["ssh", "fabric-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " submit " + shlex.quote(self.origin["name"]))],
              ["ssh", "fabric-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " recover " + shlex.quote(self.origin["name"]))],
              ["ssh", "fabric-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " close " + shlex.quote(self.origin["name"]))]),
         )
-        for target, submit, recover, close in directions:
-            nonce, task_id = "ACCEPT_" + uuid.uuid4().hex, str(uuid.uuid4()); envelope = json.dumps({"task_id": task_id, "goal": "Reply with exactly %s and nothing else." % nonce})
+        for target, origin_host, project, submit, recover, close in directions:
+            nonce, task_id = "ACCEPT_" + uuid.uuid4().hex, str(uuid.uuid4())
+            envelope = json.dumps({"task_id": task_id, "origin_host": origin_host, "project": project,
+                                   "goal": "Reply with exactly %s and nothing else." % nonce,
+                                   "acceptance": "Return the exact nonce.", "mode": "executor"})
             response = self.command(submit, input=envelope)
-            if response.returncode or "Not logged in" in ((response.stdout or "") + (response.stderr or "")): self.wait_for("Log Pi in from the GUI on %s" % target, lambda: False)
+            response_text = ((response.stdout or "") + (response.stderr or "")).strip()
+            if "Not logged in" in response_text:
+                # A GUI login cannot be probed safely; re-run after completing it.
+                raise Waiting("Log Pi in from the GUI on %s" % target)
+            if response.returncode:
+                diagnostic = "REMOTE_FAILURE"
+                for raw in (response.stdout, response.stderr):
+                    try: report = json.loads(raw)
+                    except (TypeError, ValueError): continue
+                    if isinstance(report, dict) and isinstance(report.get("diagnostic_code"), str):
+                        diagnostic = report["diagnostic_code"]; break
+                raise SetupError("Acceptance submit failed for %s: %s; remote output: %s" % (target, diagnostic, response_text[:500]))
             # The remote delegate command is a single SSH argument, so append its task args there.
             recovery = recover + [task_id, "--wait", "120"] if recover[0] != "ssh" else recover[:2] + [recover[2] + " " + shlex.quote(task_id) + " --wait 120"]
             recovered = self.command(recovery, 180)
