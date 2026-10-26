@@ -128,6 +128,8 @@ class Setup:
     def discover_remote_path(self):
         """Find user-tool directories without relying on an interactive shell profile."""
         program = """# agent-fabric-path
+# zsh aborts on an unmatched glob unless NOMATCH is disabled; sh keeps it literal.
+if [ -n "${ZSH_VERSION-}" ]; then setopt nonomatch; fi
 paths=''
 add_path() { [ -d "$1" ] && paths="${paths:+$paths:}$1"; }
 add_path /opt/homebrew/bin
@@ -276,8 +278,10 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         if self.dry_run: return
         destination = self.remote_home_path(destination[len("~"):] if destination.startswith("~") else destination)
         temporary = destination + ".fabric-setup-%s.tmp" % int(self.clock())
+        parent = shlex.quote(str(Path(destination).parent))
+        if self.remote_tool("mkdir -p " + parent).returncode: raise SetupError("Could not create remote directory " + str(Path(destination).parent))
         if self.command(["scp", str(source), "fabric-" + self.name + ":" + temporary], 120).returncode: raise SetupError("Could not copy " + str(source))
-        command = "mkdir -p %s && chmod %s %s && mv %s %s" % tuple([shlex.quote(str(Path(destination).parent)), mode, shlex.quote(temporary), shlex.quote(temporary), shlex.quote(destination)])
+        command = "mkdir -p %s && chmod %s %s && mv %s %s" % (parent, mode, shlex.quote(temporary), shlex.quote(temporary), shlex.quote(destination))
         if self.remote_tool(command).returncode: raise SetupError("Could not install remote file " + destination)
 
     def ssh_to_origin(self):

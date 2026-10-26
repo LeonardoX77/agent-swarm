@@ -34,8 +34,8 @@ class FakeMacs:
         self.mounted = self.reverse_alias = self.update_installed = False
         self.update_calls, self.nonces = [], []
         self.nonce_mismatch = False
-        self.require_authorized_key = self.nvm_only_pi = False
-        self.remote_commands = []
+        self.require_authorized_key = self.nvm_only_pi = self.scp_requires_parent = False
+        self.remote_commands = []; self.scp_destinations = []
 
     def close(self):
         self.origin.cleanup()
@@ -133,7 +133,10 @@ class FakeMacs:
             target.mkdir(parents=True, exist_ok=True)
             with tarfile.open(archive) as bundle: bundle.extractall(target)
             return Result()
-        if command.startswith("mkdir -p "): return Result()
+        if command.startswith("mkdir -p "):
+            directory = Path(shlex.split(command)[2])
+            if directory.is_relative_to(self.remote_home): directory.mkdir(parents=True, exist_ok=True)
+            return Result()
         raise AssertionError("unrecognized remote command: %r" % command)
 
     def __call__(self, argv, **kwargs):
@@ -155,7 +158,10 @@ class FakeMacs:
         if argv[:1] == ["ssh-keyscan"]: return Result(out="Bea.local ssh-ed25519 NEWKEY\n")
         if argv[:1] == ["scp"]:
             source, remote = Path(argv[1]), argv[2].split(":", 1)[1]
-            destination = Path(remote); destination.parent.mkdir(parents=True, exist_ok=True)
+            destination = Path(remote); self.scp_destinations.append(destination)
+            if self.scp_requires_parent and not destination.parent.is_dir():
+                return Result(1, err="scp destination parent does not exist")
+            destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(str(source), str(destination)); return Result()
         if argv[:1] == ["tar"]:
             source = Path(argv[argv.index("-C") + 1]) / argv[-1]
@@ -225,6 +231,17 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertIn("install --hour 04 --minute 30", machines.update_calls[0])
         self.assertTrue(setup.log_path.exists())
 
+    def test_first_install_creates_remote_copy_parent_before_scp(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.scp_requires_parent = True
+        setup, _ = self.make_setup(machines)
+
+        self.assertEqual(setup.run(), 0, setup.output.getvalue())
+        self.assertGreaterEqual(len(machines.scp_destinations), 3)
+        self.assertTrue(all(not destination.exists() for destination in machines.scp_destinations))
+        self.assertTrue((machines.remote_home / ".local/agent-fabric/bin/fabric-smb-mount").is_file())
+        self.assertTrue((machines.remote_home / ".local/agent-fabric/bin/fabric-update").is_file())
+
     def test_authorization_instruction_is_executable_and_restricted(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
         machines.require_authorized_key = True
@@ -246,6 +263,20 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertIn(public_line, setup.output.getvalue())
         self.assertIn(public_line, setup.log_path.read_text())
         self.assertEqual((machines.remote_home / ".ssh/authorized_keys").read_text().count(public_line), 1)
+
+    def test_remote_path_discovery_ignores_missing_nvm_versions_in_zsh(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        setup, _ = self.make_setup(machines)
+
+        def remote(command, timeout=60, input=None):
+            result = subprocess.run(["/bin/zsh", "-c", command], text=True, capture_output=True,
+                                    env=dict(os.environ, HOME=str(machines.remote_home)))
+            return Result(result.returncode, result.stdout, result.stderr)
+
+        setup.remote = remote
+        path = setup.discover_remote_path()
+        self.assertTrue(path.endswith("/usr/bin:/bin:/usr/sbin:/sbin"))
+        self.assertNotIn(str(machines.remote_home / ".nvm"), path)
 
     def test_nvm_default_path_is_discovered_for_runtimes_and_registry(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
