@@ -34,6 +34,20 @@
         "pi",
         "claude"
       ]
+    },
+    "macbook-bea": {
+      "hostname_prefix": "MacBookBea",
+      "role": "spoke",
+      "ssh_alias": "fabric-macbook-bea",
+      "address": "MacBookBea.local",
+      "catalog_root": "/Volumes/agent-projects",
+      "repo": "/Volumes/agent-projects/leo/mac-agent-fabric",
+      "path": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "gui_cwd": "/Users/beatrizdelcampo/tmp",
+      "runtimes": [
+        "pi",
+        "claude"
+      ]
     }
   }
 }

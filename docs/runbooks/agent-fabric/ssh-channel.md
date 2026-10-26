@@ -104,6 +104,6 @@ Una vez que ambas direcciones responden, confirme el registro y el catálogo con
 
 **Agente — con autorización.** Quite el bloque `Host fabric-<target>` del origen, la entrada que se añadió a `authorized_keys` en el destino (o restaure la copia de seguridad si sólo contiene este cambio), y el par de clave dedicada `agent_fabric_<target>` del origen. No elimine una clave reutilizada ni una copia de seguridad con cambios ajenos.
 
-## Registro: MacBook ↔ Mac mini
+## Comprobación final
 
-La configuración histórica del canal Mac mini → MacBook verificó la huella del MacBook localmente, instaló una clave dedicada restringida y ejecutó `ssh ... hostname`. Una tarea Herdr viva `03423bd5` devolvió el nonce exacto. El alias de esa dirección está siendo renombrado por T4 a `fabric-macbook`; use el registro y no el alias histórico al operar.
+En cada dirección, compruebe que `ssh fabric-<target> hostname` funciona sin contraseña y que el alias coincide con el host definido en `config/hosts.json`. Desde un host registrado, `fabric-delegate preflight <target>` debe devolver `"status": "ready"` después de montar el catálogo en un `spoke`. Una conexión SSH exitosa por sí sola no demuestra que Pi, Herdr y la aceptación bidireccional funcionen: complete las fases de `fabric-setup` y consulte su estado.
