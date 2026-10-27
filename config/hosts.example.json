@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "hub": "hub-mac",
+  "share": {
+    "host": "hub-mac.local",
+    "name": "shared-projects",
+    "user": "your-user"
+  },
+  "hosts": {
+    "hub-mac": {
+      "hostname_prefix": "HubMac",
+      "role": "hub",
+      "ssh_alias": "swarm-hub-mac",
+      "address": "hub-mac.local",
+      "catalog_root": "/Users/your-user/projects",
+      "repo": "/Users/your-user/projects/agent-swarm",
+      "path": "/opt/homebrew/bin:/usr/bin:/bin",
+      "gui_cwd": "/Users/your-user/tmp",
+      "runtimes": [
+        "pi",
+        "claude"
+      ]
+    },
+    "spoke-mac": {
+      "hostname_prefix": "SpokeMac",
+      "role": "spoke",
+      "ssh_alias": "swarm-spoke-mac",
+      "address": "spoke-mac.local",
+      "catalog_root": "/Volumes/shared-projects",
+      "repo": "/Volumes/shared-projects/agent-swarm",
+      "path": "/opt/homebrew/bin:/usr/bin:/bin",
+      "gui_cwd": "/Users/your-user/tmp",
+      "runtimes": [
+        "pi",
+        "claude"
+      ]
+    }
+  }
+}

@@ -7,3 +7,6 @@
 # Python bytecode caches
 __pycache__/
 *.py[cod]
+
+# Local host registry (copy config/hosts.example.json to config/hosts.json)
+config/hosts.json

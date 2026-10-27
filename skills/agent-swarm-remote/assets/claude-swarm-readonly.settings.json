@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "blockReadsOutsideWorkingDirectories": true,
+    "allow": [
+      "Bash(hostname)",
+      "Bash(git -C /Volumes/agent-projects/leo/mac-agent-swarm status *)",
+      "Bash(git -C /Volumes/agent-projects/leo/mac-agent-swarm branch --show-current)",
+      "Bash(git -C /Volumes/agent-projects/leo/mac-agent-swarm rev-parse --is-inside-work-tree)"
+    ],
+    "deny": [
+      "Read(//Volumes/Macintosh HD-1/**)",
+      "Edit(//Volumes/Macintosh HD-1/**)"
+    ]
+  }
+}

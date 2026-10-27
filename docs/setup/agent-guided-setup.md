@@ -1,14 +1,14 @@
-# Instalación guiada de Agent Fabric
+# Instalación guiada de Agent Swarm
 
-La única ruta de alta es `fabric-setup add-host` desde un Mac ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente.
+La única ruta de alta es `swarm-setup add-host` desde un Mac ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente.
 
 ## Camino rápido
 
-1. Confirme que el origen figura en `config/hosts.json` y ejecute el comando desde su checkout local.
+1. Confirme que el origen figura en `config/hosts.json` (registro local no versionado; cree uno desde `config/hosts.example.json` si falta) y ejecute el comando desde su checkout local.
 2. Ejecute el procedimiento descrito en [Agregar un equipo](add-host.md#camino-rápido) con el nombre, dirección y usuario del Mac nuevo.
 3. Complete las pausas locales: Remote Login, comparación de huella, login GUI de Pi y primer acceso SMB.
 4. Repita el mismo comando con las mismas opciones hasta que la aceptación bidireccional termine correctamente.
-5. Antes de delegar trabajo, ejecute `fabric-delegate preflight <destino>` y siga el [runbook de validación](../runbooks/agent-fabric/validation.md).
+5. Antes de delegar trabajo, ejecute `swarm-delegate preflight <destino>` y siga el [runbook de validación](../runbooks/agent-swarm/validation.md).
 
 El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determinan alias, endpoints, usuarios, catálogo, repositorio y rutas. No reemplace esos datos por nombres de equipos, IPs o rutas de otro despliegue.
 
@@ -32,6 +32,6 @@ El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determin
 
 ## Operación posterior
 
-Use `fabric-delegate list` para ver los destinos, `self` para identificar el origen y `preflight <destino>` antes de enviar una tarea. El [runbook de tareas Herdr + Pi](../runbooks/agent-fabric/herdr-tasks.md) describe `submit`, `recover` y `close`, incluido el requisito de conservar el mismo UUID tras un fallo de transporte.
+Use `swarm-delegate list` para ver los destinos, `self` para identificar el origen y `preflight <destino>` antes de enviar una tarea. El [runbook de tareas Herdr + Pi](../runbooks/agent-swarm/herdr-tasks.md) describe `submit`, `recover` y `close`, incluido el requisito de conservar el mismo UUID tras un fallo de transporte.
 
-Para un diagnóstico de fases, opciones, estado y recuperación, consulte [Agregar un equipo](add-host.md). Para SSH y SMB, use respectivamente [Canal SSH](../runbooks/agent-fabric/ssh-channel.md) y [Montaje SMB](../runbooks/agent-fabric/smb-mount.md).
+Para un diagnóstico de fases, opciones, estado y recuperación, consulte [Agregar un equipo](add-host.md). Para SSH y SMB, use respectivamente [Canal SSH](../runbooks/agent-swarm/ssh-channel.md) y [Montaje SMB](../runbooks/agent-swarm/smb-mount.md).
