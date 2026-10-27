@@ -13,7 +13,7 @@ T1 [S2] Replace remote `origin`; route inline; done (no push); commit n/a.
 T2 [S1] Untrack and ignore registry, add valid generic example with test and docs; route inline; done (RED: example missing -> GREEN: registry loads it and the file stays generic); committed together with T3-T4 in one commit.
 T3 [S3] Rename paths and replace the word across tracked files; route inline; done (all tracked paths renamed with git mv, content replaced, leftovers limited to removed v1 command names); same commit.
 T4 [S3] Verify tests, links, absence of the word, and installed-path references; route inline; done (110 tests OK, five CLIs answer --help, 13 docs/36 links valid, diff check OK); same commit.
-T5 [S4] Update installed local skill/bootstrap copies after per-path authorization; route inline; pending (needs the owner's per-path permission); no repo commit.
+T5 [S4] Update installed local skill/bootstrap copies after per-path authorization; route inline; done after the owner authorized the listed paths: old per-runtime skill symlinks (Pi and Claude) pointed at the removed directory and were replaced by links to `skills/agent-swarm-remote`; the bootstrap blocks in the Pi and Claude global instruction files were replaced with the new block (backups kept beside them with suffix `.bak-swarm-<timestamp>`); OpenCode had no installed copy. Only the on-disk checkout path still contains the old name.
 
 ## Log
 L1. config/hosts.json no debería estar versionado. quitalo de git. en su lugar crea config/hosts.example.json
@@ -22,3 +22,4 @@ reemplaza la palabra Fabric por Swarm en todo el proyecto, incluido el skill/s d
 L2. Remote changed first: old origin removed, `origin` now https://github.com/LeonardoX77/agent-swarm.git. Previous history already contains hosts.json on the old remote; untracking does not rewrite history.
 L3. Scope answer: "Repo + skills instaladas en este Mac". Runtime identifiers (aliases, paths, markers) are renamed in code; deployed Macs and old aliases are not migrated here. Spoke checkouts share this tree through SMB, so stale skill copies on other Macs will point at removed paths until updated.
 L4. Implemented as one cohesive commit because the example registry, its test and the renamed tree overlap in the same files. The ignored local registry stays on disk with its old `fabric-*` SSH aliases and paths, so existing delegation keeps working until the owner migrates aliases. The on-disk checkout directory is still named `mac-agent-fabric`; renaming it is the owner's call and also changes registry `repo` paths on spokes.
+L5. T5 executed on this Mac only; no other Mac was touched. Other Macs keep stale skill copies and bootstrap blocks and old SSH aliases until migrated or re-provisioned.
