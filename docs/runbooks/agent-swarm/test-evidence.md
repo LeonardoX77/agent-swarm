@@ -14,6 +14,7 @@
 | Área | Observación histórica | Límite |
 | --- | --- | --- |
 | Sesión propia | Una tab y un agente Pi propios pudieron responder un nonce y limpiarse sin cerrar recursos preexistentes. | No demuestra aislamiento completo ni garantía de producción. |
+| Arranque de Pi | En una aceptación real, Herdr devolvió un agente idle justo después de `agent start`; el adaptador dejó el ledger en `start_intent` y la aceptación quedó `unknown`. Repetir el mismo setup pasó. | Evidencia de una posible carrera de arranque, no causa confirmada ni corregida. Añadir una prueba determinista con un agente que tarde en estar listo y comprobar que la aceptación no se declara fallida ni se reenvía el prompt a ciegas. |
 | Resultado JSONL | El adaptador encontró el mensaje exacto de usuario y una respuesta final descendiente en el JSONL de la sesión propia. | Los snapshots de pantalla no correlacionan por sí mismos un turno. |
 | Ledger | Persistir intención antes de crear, iniciar, enviar y cerrar permitió conservar estados ambiguos para recuperación. | No aporta exactly-once distribuido ni autoriza reenvío automático. |
 | Envelope | El contrato correcto contiene seis campos y `mode: executor`; entradas extra o modos no admitidos se rechazan. | La validación no sustituye el control humano del alcance. |
@@ -32,7 +33,8 @@ También se observó que Herdr puede emitir errores tipados por stdout o stderr,
 2. Verificar en cada despliegue el catálogo SMB limitado, aliases, huellas y ambas direcciones SSH.
 3. Mantener login y credenciales de Pi locales al host; una observación de GUI no demuestra autenticación no interactiva distinta.
 4. Coordinar escritores humanos: el canal no implementa locks ni resolución de conflictos.
-5. Evaluar cualquier cambio de runtime o protocolo como trabajo nuevo, con evidencia nueva.
+5. Reproducir y cubrir la posible carrera entre `herdr agent start` y la disponibilidad efectiva de Pi antes de modificar el adaptador; la prueba debe distinguir agente idle sin turno recibido de respuesta final válida y evitar reenvíos ciegos.
+6. Evaluar cualquier cambio de runtime o protocolo como trabajo nuevo, con evidencia nueva.
 
 ## Evidencia local disponible
 
