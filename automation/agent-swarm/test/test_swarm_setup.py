@@ -1,5 +1,7 @@
 import io
 import json
+import runpy
+from unittest.mock import patch
 import subprocess
 import tempfile
 import unittest
@@ -243,6 +245,19 @@ class SetupTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(script), command, "--help"], text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("usage:", result.stdout)
+
+    def test_linux_catalog_cli_help_and_forwarding(self):
+        script = Path(__file__).parents[1] / "bin" / "swarm-setup"
+        result = subprocess.run([sys.executable, "-W", "ignore::SyntaxWarning", str(script), "add-host", "--help"], text=True, capture_output=True)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        help_text = " ".join(result.stdout.split())
+        self.assertIn("--linux-catalog-root", help_text)
+        self.assertIn("existing pre-mounted Linux/WSL catalog path on the target spoke", help_text)
+        cli = runpy.run_path(str(script))
+        with patch.dict(cli["main"].__globals__, Setup=unittest.mock.Mock()) as namespace:
+            namespace["Setup"].return_value.run.return_value = 0
+            self.assertEqual(cli["main"](["add-host", "--name", "new-linux", "--address", "New.local", "--user", "leo", "--linux-catalog-root", "/mnt/shared projects"]), 0)
+            self.assertEqual(namespace["Setup"].call_args.kwargs["linux_catalog_root"], "/mnt/shared projects")
 
     def test_person_wait_polls_without_tty_until_condition(self):
         setup = self.make(wait_timeout=1)

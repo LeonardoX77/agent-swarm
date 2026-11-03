@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "lib"))
-from swarm_setup import Setup
+from swarm_setup import Setup, SetupError
 from herdr_task import TaskError, _envelope
 from host_registry import HostRegistry
 
@@ -226,6 +226,168 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertFalse(any("command -v brew" in command or "brew install" in command for command in machines.remote_commands))
         self.assertFalse(machines.mounted)
         self.assertFalse(machines.update_installed)
+
+    def linux_catalog_setup(self, **options):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.system = "Linux"; machines.tools.remove("brew")
+        catalog = machines.remote_home / "mounted catalog's projects"
+        (catalog / "leo/mac-agent-swarm").mkdir(parents=True)
+        setup, registry_path = self.make_setup(machines, linux_catalog_root=str(catalog), **options)
+        return machines, catalog, setup, registry_path
+
+    def assert_no_macos_services(self, machines):
+        commands = "\n".join(machines.remote_commands)
+        for forbidden in ("swarm-smb-mount", "swarm-update", "LaunchAgents", "osascript", "diskutil", "command -v brew", "brew install", "launchctl"):
+            self.assertNotIn(forbidden, commands)
+        self.assertFalse(machines.mounted)
+        self.assertFalse(machines.update_installed)
+        self.assertEqual(machines.keychain_polls, 0)
+        self.assertEqual(machines.update_calls, [])
+
+    def test_linux_spoke_uses_existing_catalog_without_macos_services(self):
+        machines, catalog, setup, registry_path = self.linux_catalog_setup()
+        before = self.snapshot(catalog)
+        self.assertEqual(setup.run(), 0, setup.output.getvalue())
+        entry = HostRegistry(registry_path).get("bea")
+        self.assertEqual(entry["catalog_root"], str(catalog))
+        self.assertEqual(entry["repo"], str(catalog / "leo/mac-agent-swarm"))
+        self.assertEqual(self.snapshot(catalog), before)
+        self.assertIn("SKIPPED  Linux/WSL auto-update is manual; no service installed", setup.output.getvalue())
+        self.assert_no_macos_services(machines)
+        rerun, _ = self.make_setup(machines, registry_path, linux_catalog_root=str(catalog))
+        before_registry = registry_path.read_bytes()
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertEqual(registry_path.read_bytes(), before_registry)
+        self.assertEqual(rerun.changed, [])
+        self.assert_no_macos_services(machines)
+
+    def test_linux_catalog_failures_stop_before_registry_update(self):
+        cases = ((None, "Linux/WSL spoke requires --linux-catalog-root (an existing pre-mounted catalog)"),
+                 ("relative/catalog", "--linux-catalog-root must be an absolute path"),
+                 ("missing", "Linux/WSL catalog is unavailable or missing expected project: leo/mac-agent-swarm"),
+                 ("file", "Linux/WSL catalog is unavailable or missing expected project: leo/mac-agent-swarm"),
+                 ("empty", "Linux/WSL catalog is unavailable or missing expected project: leo/mac-agent-swarm"))
+        for case, error in cases:
+            with self.subTest(case=case):
+                machines, catalog, setup, registry_path = self.linux_catalog_setup()
+                if case in (None, "relative/catalog"): setup.linux_catalog_root = case
+                else:
+                    path = machines.remote_home / case
+                    if case == "file": path.write_text("not a directory")
+                    if case == "empty": path.mkdir()
+                    setup.linux_catalog_root = str(path)
+                before_registry = registry_path.read_bytes()
+                catalog_before = self.snapshot(catalog)
+                self.assertEqual(setup.run(), 1, setup.output.getvalue())
+                self.assertIn("[ 6/10] mount           FAILED   " + error + "\n", setup.output.getvalue())
+                self.assertEqual(registry_path.read_bytes(), before_registry)
+                self.assertEqual(self.snapshot(catalog), catalog_before)
+                self.assertNotIn("registry", setup.state["phases"])
+                self.assertEqual(machines.nonces, [])
+                self.assert_no_macos_services(machines)
+
+    def test_linux_registry_rechecks_catalog_even_after_mount_phase(self):
+        machines, catalog, setup, registry_path = self.linux_catalog_setup()
+        setup.local_preflight(); setup.runtimes()
+        self.assertEqual(setup.mount(), ("ok", "existing Linux/WSL catalog available"))
+        setup.linux_catalog_root = str(machines.remote_home / "now-unavailable")
+        before_registry = registry_path.read_bytes()
+        before_remote = self.snapshot(machines.remote_home)
+        with self.assertRaisesRegex(SetupError, "catalog is unavailable or missing expected project"):
+            setup.registry_phase()
+        self.assertEqual(registry_path.read_bytes(), before_registry)
+        self.assertEqual(self.snapshot(machines.remote_home), before_remote)
+        self.assertEqual(setup.results, [])
+        self.assertEqual(setup.changed, [])
+        self.assertEqual(setup.output.getvalue(), "")
+        self.assert_no_macos_services(machines)
+
+    def test_linux_dry_run_validates_catalog_without_writes(self):
+        machines, catalog, setup, registry_path = self.linux_catalog_setup(dry_run=True)
+        before_remote = self.snapshot(machines.remote_home)
+        before_registry = registry_path.read_bytes()
+        self.assertEqual(setup.run(), 4, setup.output.getvalue())
+        self.assertEqual(setup.generated_registry_entry["catalog_root"], str(catalog))
+        self.assertEqual(self.snapshot(machines.remote_home), before_remote)
+        self.assertEqual(registry_path.read_bytes(), before_registry)
+        self.assertFalse(setup.state_path.exists())
+        self.assert_no_macos_services(machines)
+
+    def test_linux_catalog_option_rejected_on_macos_spoke(self):
+        for catalog in ("/mnt/projects", ""):
+            for dry_run in (False, True):
+                with self.subTest(catalog=catalog, dry_run=dry_run):
+                    machines = FakeMacs(); self.addCleanup(machines.close)
+                    setup, registry_path = self.make_setup(machines, linux_catalog_root=catalog, dry_run=dry_run)
+                    registry_before = registry_path.read_bytes()
+                    remote_before = self.snapshot(machines.remote_home)
+                    self.assertEqual(setup.run(), 1, setup.output.getvalue())
+                    self.assertTrue(setup.output.getvalue().endswith(
+                        "[ 4/10] runtimes        FAILED   --linux-catalog-root requires a Linux/WSL target (detected Darwin)\n"))
+                    self.assertEqual(registry_path.read_bytes(), registry_before)
+                    self.assertEqual(self.snapshot(machines.remote_home), remote_before)
+                    self.assertEqual(machines.keychain_polls, 0)
+                    self.assertEqual(machines.update_calls, [])
+                    self.assertEqual(machines.nonces, [])
+                    self.assertEqual(machines.scp_destinations, [])
+                    self.assertFalse(any("command -v " in command or "swarm-smb-mount" in command
+                                         for command in machines.remote_commands))
+                    self.assertNotIn("mount", setup.state["phases"])
+                    self.assertNotIn("registry", setup.state["phases"])
+
+    def test_linux_catalog_option_rejected_for_hub_before_ssh(self):
+        for system in ("Linux", "Darwin"):
+            for catalog in ("/mnt/projects", ""):
+                with self.subTest(system=system, catalog=catalog):
+                    machines = FakeMacs(); self.addCleanup(machines.close)
+                    machines.system = system
+                    setup, registry_path = self.make_setup(machines, role="hub", linux_catalog_root=catalog)
+                    registry_before = registry_path.read_bytes()
+                    remote_before = self.snapshot(machines.remote_home)
+                    self.assertEqual(setup.run(), 1, setup.output.getvalue())
+                    self.assertEqual(setup.output.getvalue(),
+                        "[ 1/10] local-preflight FAILED   --linux-catalog-root is only supported for --role spoke\n")
+                    self.assertEqual(registry_path.read_bytes(), registry_before)
+                    self.assertEqual(self.snapshot(machines.remote_home), remote_before)
+                    self.assertEqual(machines.remote_commands, [])
+                    self.assertEqual(machines.port_polls, 0)
+                    self.assertEqual(machines.authorization_polls, 0)
+                    self.assertEqual(machines.keychain_polls, 0)
+                    self.assertEqual(machines.update_calls, [])
+                    self.assertEqual(machines.nonces, [])
+                    self.assertEqual(setup.changed, [])
+
+    def test_linux_catalog_option_cannot_bypass_validation_in_mount_or_registry(self):
+        for system, role, message in (("Darwin", "spoke", "--linux-catalog-root requires a Linux/WSL target (detected Darwin)"),
+                                      ("Linux", "hub", "--linux-catalog-root is only supported for --role spoke")):
+            for phase in ("mount", "registry_phase"):
+                with self.subTest(system=system, role=role, phase=phase):
+                    machines = FakeMacs(); self.addCleanup(machines.close)
+                    machines.system = system
+                    setup, registry_path = self.make_setup(machines, role=role, linux_catalog_root="/mnt/projects")
+                    setup.origin = setup.registry.get("origin")
+                    setup.remote_path = "/usr/bin:/bin"
+                    registry_before = registry_path.read_bytes()
+                    remote_before = self.snapshot(machines.remote_home)
+                    with self.assertRaises(SetupError) as raised:
+                        getattr(setup, phase)()
+                    self.assertEqual(str(raised.exception), message)
+                    self.assertEqual(setup.output.getvalue(), "")
+                    self.assertEqual(registry_path.read_bytes(), registry_before)
+                    self.assertEqual(self.snapshot(machines.remote_home), remote_before)
+                    self.assertEqual(machines.remote_commands, ["uname -s"] if role == "spoke" else [])
+                    self.assertEqual(machines.keychain_polls, 0)
+                    self.assertEqual(machines.update_calls, [])
+                    self.assertEqual(setup.changed, [])
+                    self.assertEqual(setup.results, [])
+
+    def test_linux_hub_skips_catalog_and_macos_update_service(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.system = "Linux"
+        setup, _ = self.make_setup(machines, role="hub")
+        self.assertEqual(setup.mount(), ("skipped", "skipped for hub role"))
+        self.assertEqual(setup.auto_update_phase(), ("skipped", "Linux/WSL auto-update is manual; no service installed"))
+        self.assert_no_macos_services(machines)
 
     def test_zero_to_done_without_tty(self):
         machines, setup, registry_path = self.run_zero_to_done()
