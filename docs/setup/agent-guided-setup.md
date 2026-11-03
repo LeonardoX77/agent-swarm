@@ -1,18 +1,28 @@
 # Instalación guiada de Agent Swarm
 
-La única ruta de alta es `swarm-setup add-host` desde un Mac ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente.
+La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente. Linux/WSL requiere runtimes y catálogo aprovisionados manualmente; su delegación de extremo a extremo no se ha validado.
 
 ## Camino rápido
 
 1. Confirme que el origen figura en `config/hosts.json` (registro local no versionado; cree uno desde `config/hosts.example.json` si falta) y ejecute el comando desde su checkout local.
-2. Ejecute el procedimiento descrito en [Agregar un equipo](add-host.md#camino-rápido) con el nombre, dirección y usuario del Mac nuevo.
-3. Complete las pausas locales: Remote Login, comparación de huella, login GUI de Pi y primer acceso SMB.
+2. Ejecute el procedimiento descrito en [Agregar un equipo](add-host.md#camino-rápido) con el nombre, dirección y usuario del equipo nuevo. Para Linux/WSL, siga primero el [aprovisionamiento manual](add-host.md#linuxwsl-aprovisionamiento-manual).
+3. Complete las pausas locales: acceso SSH, comparación de huella y login de Pi; en macOS, también Remote Login y primer acceso SMB desde Finder.
 4. Repita el mismo comando con las mismas opciones hasta que la aceptación bidireccional termine correctamente.
 5. Antes de delegar trabajo, ejecute `swarm-delegate preflight <destino>` y siga el [runbook de validación](../runbooks/agent-swarm/validation.md).
 
 El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determinan alias, endpoints, usuarios, catálogo, repositorio y rutas. No reemplace esos datos por nombres de equipos, IPs o rutas de otro despliegue.
 
+## Linux/WSL antes del alta
+
+- Preinstale Node, Python 3, Pi, gentle-pi y Herdr; deje disponible el servidor Herdr y complete el login de Pi en el destino. No se requiere Homebrew.
+- Para un spoke, monte el catálogo por su cuenta y pase `--linux-catalog-root /mnt/shared-projects`. La ruta debe ser absoluta en el destino y contener el proyecto en la misma ruta relativa al catálogo que el repositorio de origen.
+- El setup no monta SMB, no gestiona sus credenciales y no instala un servicio de actualización automática en Linux/WSL; mantenga esos recursos manualmente.
+
+La opción sólo admite spokes Linux/WSL: otros roles fallan en el preflight local; un destino macOS falla después de autenticar SSH y detectar su plataforma. En ese último caso pueden quedar artefactos locales del bootstrap SSH, pero no se continúa con SMB, registro ni configuración remota del host. Consulte [los detalles](add-host.md#linuxwsl-aprovisionamiento-manual) antes de reintentar.
+
 ## Pausas humanas
+
+La tabla siguiente describe macOS. En Linux/WSL, prepare SSH y el catálogo manualmente antes del alta; las verificaciones de huella y login siguen siendo necesarias.
 
 | Momento | Acción local | Confirmación segura |
 | --- | --- | --- |
@@ -25,7 +35,7 @@ El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determin
 ## Límites
 
 - El setup no autoriza cambios de red, `sudo`, credenciales ni instalaciones ajenas a sus fases.
-- Los perfiles, Keychain, sesiones, cachés y directorios personales permanecen en cada Mac.
+- Los perfiles, sesiones, cachés y directorios personales permanecen en cada nodo; Keychain es exclusivo de macOS.
 - La skill se copia mediante el mecanismo local del setup; SMB no transporta credenciales ni directorios personales.
 - Guarde sólo estado, fase, versión y código de salida saneados. No guarde contraseñas, tokens, claves privadas ni sobres de tarea en tickets o logs compartidos.
 - Si el resultado es ambiguo, consulte el estado persistido antes de reintentar. No reinicie sesiones existentes para forzar una recuperación.

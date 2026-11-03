@@ -6,6 +6,7 @@ import plistlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "swarm-smb-mount"
 
@@ -162,13 +163,19 @@ class SMBMountTests(unittest.TestCase):
         self.assertFalse(plist_path.exists())
         self.assertEqual(["/bin/launchctl", "bootout", "gui/501/" + mount_tool.agent_label("MacBookLeo.local", "agent-projects")], self.runner.calls[1][0])
 
+    @patch.object(mount_tool.sys, "platform", "darwin")
     def test_invalid_values_are_rejected(self):
         for argv in (["status", "--host", "bad host", "--share", "x"], ["status", "--host", "host", "--share", "bad/share"], ["status", "--host", "host", "--share", "x", "--user", "bad@user"], ["mount", "--host", "host", "--share", "x", "--wait", "0"]):
-            code, output = mount_tool.run(argv, runner=Runner(), home=self.home, uid=501)
-            self.assertEqual(2, code)
-            self.assertFalse(output["ok"])
-            self.assertEqual("invalid_arguments", output["error"])
+            with self.subTest(argv=argv):
+                runner = Runner()
+                code, output = mount_tool.run(argv, runner=runner, home=self.home, uid=501)
+                self.assertEqual(2, code)
+                self.assertFalse(output["ok"])
+                self.assertEqual("invalid_arguments", output["error"])
+                self.assertEqual([], runner.calls)
+                self.assertEqual([], list(self.home.iterdir()))
 
+    @patch.object(mount_tool.sys, "platform", "darwin")
     def test_no_password_option_and_no_traceback_on_unexpected_error(self):
         code, output = mount_tool.run(["status", "--host", "host", "--share", "x", "--password", "secret"], runner=Runner(), home=self.home, uid=501)
         self.assertEqual(2, code)
@@ -177,6 +184,17 @@ class SMBMountTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertEqual("unexpected_error", output["error"])
         self.assertNotIn("Traceback", json.dumps(output))
+
+    @patch.object(mount_tool.sys, "platform", "linux")
+    def test_linux_returns_unsupported_platform_without_side_effects(self):
+        for command in ("status", "mount", "unmount"):
+            with self.subTest(command=command):
+                runner = Runner()
+                code, output = mount_tool.run([command, "--host", "host", "--share", "x"], runner=runner, home=self.home, uid=501)
+                self.assertEqual(2, code)
+                self.assertEqual({"ok": False, "error": "unsupported_platform", "message": "swarm-smb-mount only supports macOS"}, output)
+                self.assertEqual([], runner.calls)
+                self.assertEqual([], list(self.home.iterdir()))
 
 
 if __name__ == "__main__":

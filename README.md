@@ -61,12 +61,12 @@ flowchart LR
 
 The protocol only needs standard Unix tools: SSH, Python 3, an SMB share, and Herdr with Pi. It is therefore designed for any Unix-like system.
 
-| Component | macOS | Linux and other Unix |
+| Component | macOS | Linux / WSL |
 | --- | --- | --- |
-| Task delegation (`swarm-delegate`, `swarm-herdr-task`) | ✅ | Portable by design; not validated yet |
-| Automated setup (`swarm-setup`) | ✅ | Pending |
-| Persistent SMB mount (`swarm-smb-mount`) | ✅ uses Keychain and launchd | Pending: mount the share by hand |
-| Daily update (`swarm-update`) | ✅ uses launchd | Pending |
+| Task delegation (`swarm-delegate`, `swarm-herdr-task`) | ✅ | End-to-end delegation not validated |
+| Setup (`swarm-setup`) | ✅ | Supported with manually provisioned runtimes and catalog |
+| Persistent SMB mount (`swarm-smb-mount`) | ✅ uses Keychain and launchd | Manual provisioning; no automatic mount or credential handling |
+| Daily update (`swarm-update`) | ✅ uses launchd | Manual updates; no auto-update service |
 
 ## 🧱 Components
 
@@ -112,7 +112,7 @@ cp config/hosts.example.json config/hosts.json
 
 ### 2. Add each node
 
-From an already registered node:
+From an already registered macOS or Linux/WSL node, use the following for a **macOS target**:
 
 ```sh
 automation/agent-swarm/bin/swarm-setup add-host \
@@ -120,7 +120,19 @@ automation/agent-swarm/bin/swarm-setup add-host \
   --install-missing --no-auto-update
 ```
 
-Drop `--no-auto-update` if you want the daily update. If the command stops waiting for an action, do it and **run the same command again**: it continues from the pending phase.
+On macOS, drop `--no-auto-update` if you want the daily update. If the command stops waiting for an action, do it and **run the same command again**: it continues from the pending phase.
+
+For a **Linux/WSL spoke**, preinstall Node, Python 3, Pi, gentle-pi and Herdr, make the Herdr server available, and complete Pi login on that host. Enable SSH and mount the catalog yourself before setup:
+
+```sh
+automation/agent-swarm/bin/swarm-setup add-host \
+  --name linux-spoke --address linux-spoke.local --user your-user \
+  --role spoke --linux-catalog-root /mnt/shared-projects --no-auto-update
+```
+
+The catalog path must be absolute on the target and contain the project at the same path relative to the catalog as the origin repository (for example, `agent-swarm` under `/mnt/shared-projects`). Setup does not mount SMB, manage credentials, or install an auto-update service on Linux/WSL. See [setup details and rejection behavior](docs/setup/add-host.md#linuxwsl-aprovisionamiento-manual).
+
+The phase diagram below describes the macOS path; Linux/WSL checks the existing catalog instead of mounting it and skips the update service.
 
 ```mermaid
 flowchart TD
@@ -220,7 +232,7 @@ If you get `unknown`, query again with `recover` and the same UUID. If nothing c
 ## 🔐 Security
 
 - **SSH:** one `swarm-<node>` alias and one dedicated key per direction, with `StrictHostKeyChecking` on and no agent or port forwarding.
-- **SMB:** only the approved catalog is shared, and credentials are stored in the local credential store of the node that mounts it.
+- **SMB:** only the approved catalog is shared. macOS uses the mounting node's Keychain; Linux/WSL mounts and credentials are provisioned manually outside setup.
 - **Agents:** Pi and Herdr sessions and credentials never leave the node that runs them.
 - **Cleanup:** each node only closes the tabs and sessions it created itself.
 - **Concurrent writes:** not coordinated automatically. If two tasks touch the same project, review is human.
@@ -250,7 +262,7 @@ What is not done yet and where the project is heading:
 - [ ] **MCP server.** Publish `list_nodes`, `check_node`, `submit_task`, `get_task`, `close_task` and `node_load` as MCP tools. It will be a local stdio server wrapping `swarm-delegate`, keeping SSH as the transport, never blocking on long tasks, never retrying automatically and requiring human approval for `submit_task`.
 - [ ] **Test on Linux.** Task delegation is meant to be portable, but it has only been validated on macOS.
 - [ ] **Remove the macOS dependency.** `swarm-smb-mount` and `swarm-update` use launchd, Keychain and `osascript`, which only exist on macOS. Linux alternatives are missing, for example `mount.cifs` with a protected credentials file and a systemd timer.
-- [ ] **Automated setup on Linux.** `swarm-setup` still assumes macOS paths and services.
+- [ ] **Full provisioning on Linux/WSL.** `swarm-setup` supports manually provisioned runtimes and catalogs; automatic SMB mounting and an auto-update service remain unimplemented.
 - [ ] **Possible race when Pi starts.** In a real run, acceptance returned `unknown` because the Pi session was evaluated before it was ready; running it again worked. A deterministic test that reproduces it is needed before fixing the adapter. Details are in the [test evidence](docs/runbooks/agent-swarm/test-evidence.md).
 
 ## 🤝 Contributing

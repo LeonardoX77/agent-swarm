@@ -1,13 +1,13 @@
 # Agregar un equipo al canal Agent Swarm
 
-El camino canónico para incorporar un Mac nuevo es ejecutar **un único comando** desde un Mac ya registrado. `swarm-setup` coordina las diez fases, se detiene sólo ante acciones humanas y conserva el estado para reanudar la misma operación.
+El camino canónico para incorporar un equipo macOS o Linux/WSL es ejecutar **un único comando** desde un nodo ya registrado. `swarm-setup` coordina las diez fases, se detiene ante acciones humanas y conserva el estado para reanudar la misma operación. En Linux/WSL, los runtimes y el catálogo requieren aprovisionamiento manual previo; no se ha validado la delegación de extremo a extremo en esa plataforma.
 
 ## Camino rápido
 
 ### Requisitos
 
-- El Mac de origen ya está registrado en `config/hosts.json` y se ejecuta el comando desde su checkout del repositorio. Ese archivo es local y no se versiona: si no existe, copie `config/hosts.example.json` y sustituya los valores de ejemplo por los reales.
-- El Mac nuevo usa macOS y la persona puede sentarse delante de él para algunos pasos GUI.
+- El nodo de origen (macOS o Linux/WSL) ya está registrado en `config/hosts.json` y se ejecuta el comando desde su checkout del repositorio. Ese archivo es local y no se versiona: si no existe, copie `config/hosts.example.json` y sustituya los valores de ejemplo por los reales.
+- Para el camino macOS siguiente, el equipo nuevo usa macOS y la persona puede sentarse delante de él para algunos pasos GUI. Para Linux/WSL, siga [el aprovisionamiento manual](#linuxwsl-aprovisionamiento-manual).
 - **Pi y gentle-pi son obligatorios; Claude es opcional; Herdr es obligatorio.**
 - Hay conectividad LAN o Tailscale hacia `<host>.local` y se conoce la cuenta `<user>` del Mac nuevo.
 
@@ -33,9 +33,27 @@ Al completar con éxito termina con salida `0`. Revise la entrada que el setup a
 
 > Si se interrumpe o espera a una persona, ejecute **el mismo comando con las mismas opciones** otra vez desde el origen. Comprueba de nuevo cada fase y conserva lo ya configurado; no genere otra huella ni acepte una distinta sin verificarla localmente.
 
+## Linux/WSL: aprovisionamiento manual
+
+Antes del alta, active el servidor SSH para la cuenta elegida y prepare en el destino Node, Python 3, Pi, gentle-pi y Herdr, con el servidor Herdr disponible (`herdr tab list`) y el login de Pi completado localmente. Homebrew no es requisito en Linux/WSL. `--install-missing` no aprovisiona esos runtimes: sólo puede añadir gentle-pi si Pi ya está disponible; la instalación automática de Herdr mediante Homebrew es exclusiva de macOS.
+
+Para un spoke, monte previamente el catálogo compartido por su cuenta y pase su ruta **absoluta en el destino**:
+
+```sh
+automation/agent-swarm/bin/swarm-setup add-host \
+  --name linux-spoke --address linux-spoke.local --user your-user \
+  --role spoke --linux-catalog-root /mnt/shared-projects --no-auto-update
+```
+
+El catálogo debe existir y contener el proyecto en la misma ruta relativa que `repo` respecto a `catalog_root` en el origen. Si el origen usa `/srv/projects/agent-swarm`, con catálogo `/srv/projects`, el destino debe tener `/mnt/shared-projects/agent-swarm`. El setup comprueba el catálogo y el proyecto; no crea ni monta el recurso, no pide ni guarda credenciales SMB y no instala servicios de montaje.
+
+`--linux-catalog-root` sólo es válido para un destino Linux/WSL con rol `spoke`. Un rol distinto se rechaza en el preflight local. Un destino macOS se rechaza después de autenticar SSH y detectar la plataforma: pueden quedar artefactos locales del bootstrap SSH (clave, `known_hosts` y alias), pero no se continúa con SMB, registro ni configuración remota del host. La detección consulta el destino; no se deduce del sistema operativo del origen.
+
+La actualización en Linux/WSL es manual: incluso con `--auto-update`, la fase se omite sin instalar LaunchAgent, timer systemd ni otro servicio. `--no-auto-update` en el ejemplo hace explícita esa intención. Para un hub Linux/WSL, la publicación del catálogo también se prepara manualmente; no use `--linux-catalog-root`.
+
 ## Las diez fases
 
-Los nombres de fase siguientes son los que imprime el programa exactamente.
+Los nombres de fase siguientes son los que imprime el programa exactamente. La tabla describe macOS; en Linux/WSL, `remote-login` requiere un servidor SSH preparado manualmente, `runtimes` aplica los requisitos anteriores, `mount` sólo valida el catálogo existente del spoke y `auto-update` se omite.
 
 | Fase | Qué hace el script | Quién actúa | Si se detiene, texto exacto que muestra |
 | --- | --- | --- | --- |
@@ -116,13 +134,14 @@ Compárela con la huella observada desde el origen. Puede pasar el valor ya veri
 
 | Opción | Uso |
 | --- | --- |
-| `--name`, `--address`, `--user` | Obligatorios: nombre de registro, dirección y cuenta del nuevo Mac. |
+| `--name`, `--address`, `--user` | Obligatorios: nombre de registro, dirección y cuenta del nuevo equipo. |
 | `--role {hub,spoke}` | Rol del nuevo host; el predeterminado es `spoke`. |
 | `--host-fingerprint SHA256:...` | Huella previamente verificada; evita la pregunta de TTY. |
 | `--origin-user USER` | Cuenta que usará el canal inverso hacia el origen. |
-| `--install-missing` | Intenta instalar sólo Herdr y gentle-pi cuando Homebrew/Pi ya existen. |
-| `--auto-update` / `--no-auto-update` | Activa (predeterminado) o omite el LaunchAgent diario. |
-| `--update-time HH:MM` | Hora diaria; el predeterminado es `04:30`. |
+| `--linux-catalog-root RUTA` | Obligatoria para un spoke Linux/WSL: catálogo premontado absoluto que contiene el proyecto relativo al origen. Se rechaza en macOS y con otros roles. |
+| `--install-missing` | Intenta instalar Herdr sólo en macOS con Homebrew disponible, y gentle-pi con Pi disponible en ambas plataformas. |
+| `--auto-update` / `--no-auto-update` | En macOS activa (predeterminado) u omite el LaunchAgent diario; Linux/WSL omite el servicio siempre. |
+| `--update-time HH:MM` | Hora diaria en macOS; el predeterminado es `04:30`. |
 | `--skip-live` | Omite las pruebas de tareas vivas de aceptación, pero conserva los preflight. |
 | `--dry-run` | No escribe estado ni configuración; informa qué fases cambiarían y devuelve `4` si habría cambios. |
 | `--no-wait` | No espera intervención humana: guarda la fase como pendiente y devuelve `10`. |
@@ -138,13 +157,13 @@ Consulte el estado persistido con:
 automation/agent-swarm/bin/swarm-setup status --name <name>
 ```
 
-El estado está en `~/.local/state/agent-swarm/setup/<name>.json` y el log en `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log`. Ante un error inesperado, consulte ese log y, si hace falta, reanude con `--verbose` y las mismas opciones; comparta sólo diagnóstico saneado, pues los logs pueden incluir claves **públicas**, rutas y nombres de usuario. La salida normal es resumida en inglés; `--verbose` registra cada comando, código de salida y salida recortada. Si el setup termina con salida `0`, confirme además `automation/agent-swarm/bin/swarm-delegate preflight <name>`: debe devolver `"status": "ready"`. No confunda el estado `WAITING` ni un éxito parcial de SSH con la aceptación final.
+El estado está en `~/.local/state/agent-swarm/setup/<name>.json`. El log está en `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log` para un origen macOS y en `~/.local/state/agent-swarm/logs/swarm-setup-<name>.log` para un origen Linux/WSL. Ante un error inesperado, consulte ese log y, si hace falta, reanude con `--verbose` y las mismas opciones; comparta sólo diagnóstico saneado, pues los logs pueden incluir claves **públicas**, rutas y nombres de usuario. La salida normal es resumida en inglés; `--verbose` registra cada comando, código de salida y salida recortada. Si el setup termina con salida `0`, confirme además `automation/agent-swarm/bin/swarm-delegate preflight <name>`: debe devolver `"status": "ready"`. No confunda el estado `WAITING` ni un éxito parcial de SSH con la aceptación final.
 
 Volver a ejecutar el comando contra un host ya configurado es seguro: las fases que ya cumplen su condición informan `OK` y no cambian configuración. Un nombre existente con otra dirección, una huella distinta o un alias SSH diferente falla en vez de sobrescribirlo.
 
 ## Procedimiento manual (referencia)
 
-Use este apéndice sólo para diagnosticar una fase que no pueda completarse con `swarm-setup`.
+Use este apéndice macOS sólo para diagnosticar una fase que no pueda completarse con `swarm-setup`. Para Linux/WSL, siga el [aprovisionamiento manual](#linuxwsl-aprovisionamiento-manual); Finder, Keychain y launchd no son aplicables.
 
 1. En el Mac nuevo, active Remote Login para la cuenta elegida y prepare Homebrew, Node, Pi, gentle-pi y Herdr; complete el login de Pi y abra Herdr en la GUI.
 2. Configure ambas direcciones SSH con clave dedicada, huella local verificada, `known_hosts`, `authorized_keys` restringido y alias `swarm-<target>`. Siga el [runbook del canal SSH](../runbooks/agent-swarm/ssh-channel.md).
