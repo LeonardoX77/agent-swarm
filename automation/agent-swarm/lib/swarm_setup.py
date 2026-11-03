@@ -1,4 +1,4 @@
-"""Single-process, resumable setup for a new Agent Swarm Mac."""
+"""Single-process, resumable setup for a new Agent Swarm host."""
 from __future__ import annotations
 
 import getpass
@@ -40,7 +40,8 @@ class Setup:
                  origin_user=None, auto_update=True, update_time="04:30", install_missing=False,
                  skip_live=False, dry_run=False, no_wait=False, wait_timeout=30, verbose=False,
                  registry=None, registry_path=None, runner=None, home=None, nodename=None,
-                 tty=None, uid=None, output=None, sleep=None, clock=None, reader=None):
+                 tty=None, uid=None, output=None, sleep=None, clock=None, reader=None,
+                 local_system=None):
         self.name, self.address, self.user, self.role = name, address, user, role
         self.host_fingerprint, self.origin_user = host_fingerprint, origin_user
         self.auto_update, self.update_time, self.install_missing = auto_update, update_time, install_missing
@@ -54,8 +55,11 @@ class Setup:
         self.reader = reader or input
         self.changed, self.results, self.phase_names = [], [], list(PHASES)
         self.remote_home = None
+        self.local_system = local_system if local_system is not None else os.uname().sysname
+        self.remote_system = None
         self.state_path = self.home / ".local/state/agent-swarm/setup" / (name + ".json")
-        self.log_path = self.home / "Library/Logs/mac-agent-swarm" / ("swarm-setup-" + name + ".log")
+        log_directory = "Library/Logs/mac-agent-swarm" if self.local_system == "Darwin" else ".local/state/agent-swarm/logs"
+        self.log_path = self.home / log_directory / ("swarm-setup-" + name + ".log")
         self.state = self._read_state()
 
     @staticmethod
@@ -159,6 +163,16 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         self.remote_path = path; self.state["remote_path"] = path
         return path
 
+    def remote_system_name(self):
+        """Probe the SSH target, independently of the origin (WSL reports Linux)."""
+        if self.remote_system is None:
+            result = self.remote("uname -s")
+            system = result.stdout.strip()
+            if result.returncode or system not in ("Darwin", "Linux"):
+                raise SetupError("Could not determine remote platform (expected Darwin or Linux)")
+            self.remote_system = system
+        return self.remote_system
+
     def remote_home_path(self, suffix=""):
         if self.remote_home is None:
             result = self.remote('printf %s "$HOME"')
@@ -194,7 +208,7 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
     def local_preflight(self):
         if not NAME.fullmatch(self.name) or not ADDRESS.fullmatch(self.address) or not self.user: raise SetupError("Invalid host name, address, or user")
         self.origin = self.registry.self_host(self.nodename)
-        if not self.origin: raise SetupError("This Mac is not the registry self_host")
+        if not self.origin: raise SetupError("This host is not the registry self_host")
         existing = self.registry.hosts.get(self.name)
         if existing and existing["address"] != self.address: raise SetupError("Existing host address does not match")
         for tool in ("ssh", "ssh-keygen", "ssh-keyscan"):
@@ -266,10 +280,12 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
 
     def runtimes(self):
         self.discover_remote_path()
-        probes = {"brew": "command -v brew", "herdr": "command -v herdr", "node": "command -v node", "pi": "command -v pi", "python3": "command -v python3", "gentle-pi": "pi list 2>/dev/null | grep -F gentle-pi", "herdr-server": "herdr tab list"}
+        system = self.remote_system_name()
+        probes = {"herdr": "command -v herdr", "node": "command -v node", "pi": "command -v pi", "python3": "command -v python3", "gentle-pi": "pi list 2>/dev/null | grep -F gentle-pi", "herdr-server": "herdr tab list"}
+        if system == "Darwin": probes["brew"] = "command -v brew"
         def missing(): return [n for n, command in probes.items() if self.remote_tool(command).returncode != 0]
         absent = missing(); changed = []
-        if self.install_missing and "herdr" in absent and "brew" not in absent and self.remote_tool("brew install herdr", 1200).returncode == 0: changed.append("installed herdr")
+        if system == "Darwin" and self.install_missing and "herdr" in absent and "brew" not in absent and self.remote_tool("brew install herdr", 1200).returncode == 0: changed.append("installed herdr")
         if self.install_missing and "gentle-pi" in absent and "pi" not in absent and self.remote_tool("pi install npm:gentle-pi", 600).returncode == 0: changed.append("installed gentle-pi")
         if missing(): self.wait_for("On %s: install missing runtimes and log Pi in once from the GUI" % self.name, lambda: not missing())
         return self.result("changed" if changed else "ok", ", ".join(changed) or "required runtimes available")
@@ -339,7 +355,11 @@ if not m:
         return self.result("changed", "mounted catalog")
 
     def remote_facts(self):
-        hostname = self.remote_tool("scutil --get LocalHostName").stdout.strip(); paths = []
+        command = "scutil --get LocalHostName" if self.remote_system_name() == "Darwin" else "hostname -s"
+        result = self.remote_tool(command)
+        hostname = result.stdout.strip()
+        if result.returncode or not hostname: raise SetupError("Could not determine remote hostname")
+        paths = []
         for tool in ("pi", "herdr", "python3"):
             value = self.remote_tool("command -v " + tool).stdout.strip()
             if not value: raise SetupError("Remote tool missing: " + tool)
@@ -348,7 +368,7 @@ if not m:
 
     def build_registry_entry(self):
         facts = self.remote_facts(); root = self.origin["catalog_root"]; relative = os.path.relpath(self.origin["repo"], root); catalog = "/Volumes/" + self.registry.share["name"] if self.role == "spoke" else root
-        return {"hostname_prefix": facts["hostname_prefix"], "role": self.role, "ssh_alias": "swarm-" + self.name, "address": self.address, "catalog_root": catalog, "repo": str(Path(catalog) / relative), "path": facts["path"], "gui_cwd": "/Users/%s/tmp" % self.user, "runtimes": ["pi"] + (["claude"] if facts["claude"] else [])}
+        return {"hostname_prefix": facts["hostname_prefix"], "role": self.role, "ssh_alias": "swarm-" + self.name, "address": self.address, "catalog_root": catalog, "repo": str(Path(catalog) / relative), "path": facts["path"], "gui_cwd": self.remote_home_path("/tmp"), "runtimes": ["pi"] + (["claude"] if facts["claude"] else [])}
 
     def registry_phase(self):
         entry = self.build_registry_entry(); self.generated_registry_entry = entry; existing = self.registry.hosts.get(self.name)

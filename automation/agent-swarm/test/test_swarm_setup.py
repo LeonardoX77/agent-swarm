@@ -62,6 +62,172 @@ class SetupTests(unittest.TestCase):
                      nodename="Origin.local", tty=False, uid=uid, output=output,
                      sleep=sleep, clock=lambda: now[0], **kwargs)
 
+    def test_platform_specific_log_locations(self):
+        for system, suffix in (("Linux", ".local/state/agent-swarm/logs"),
+                               ("Darwin", "Library/Logs/mac-agent-swarm")):
+            with self.subTest(system=system):
+                setup = self.make(local_system=system)
+                setup.emit("progress")
+                self.assertEqual(setup.log_path, setup.home / suffix / "swarm-setup-new-mac.log")
+                self.assertEqual(setup.log_path.read_text(), "progress\n")
+                self.assertEqual(setup.output.getvalue(), "progress\n")
+
+    def test_linux_runtimes_do_not_require_or_install_homebrew(self):
+        setup = self.make(no_wait=True, install_missing=True)
+        calls = []
+        def remote(command, timeout=60, input=None):
+            calls.append(command)
+            if command == "uname -s": return Result(out="Linux\n")
+            if command.startswith("# agent-swarm-path"): return Result(out="/usr/local/bin:/usr/bin:/bin\n")
+            if "brew" in command: return Result(1)
+            return Result()
+        setup.remote = remote
+        self.assertEqual(setup.runtimes(), ("ok", "required runtimes available"))
+        self.assertFalse(any("command -v brew" in command or "brew install" in command for command in calls))
+        self.assertEqual(setup.output.getvalue(), "")
+        self.assertFalse(setup.state_path.exists())
+
+    def test_linux_missing_runtime_waits_without_package_bootstrap(self):
+        setup = self.make(no_wait=True, install_missing=True)
+        calls = []
+        def remote(command, timeout=60, input=None):
+            calls.append(command)
+            if command == "uname -s": return Result(out="Linux\n")
+            if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
+            return Result(1 if command.endswith("command -v herdr") else 0)
+        setup.remote = remote
+        with self.assertRaisesRegex(Waiting, "install missing runtimes"):
+            setup.runtimes()
+        self.assertEqual(setup.output.getvalue(), "On new-mac: install missing runtimes and log Pi in once from the GUI\n")
+        self.assertFalse(setup.state_path.exists())
+        self.assertFalse(any(" install " in command for command in calls))
+
+    def test_macos_runtimes_still_require_homebrew(self):
+        setup = self.make(no_wait=True)
+        def remote(command, timeout=60, input=None):
+            if command == "uname -s": return Result(out="Darwin\n")
+            if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
+            return Result(1 if command.endswith("command -v brew") else 0)
+        setup.remote = remote
+        with self.assertRaises(Waiting): setup.runtimes()
+        self.assertFalse(setup.state_path.exists())
+
+    def test_remote_platform_probe_failure_is_not_treated_as_linux(self):
+        setup = self.make()
+        setup.remote = lambda *args, **kwargs: Result(1, "Linux\n")
+        with self.assertRaisesRegex(SetupError, "Could not determine remote platform"):
+            setup.remote_system_name()
+
+    def test_remote_facts_use_platform_hostname_and_remote_home(self):
+        for system, hostname_command, home in (("Linux", "hostname -s", "/home/leo"),
+                                                ("Darwin", "scutil --get LocalHostName", "/Users/leo")):
+            with self.subTest(system=system):
+                setup = self.make(role="hub")
+                setup.origin = setup.registry.get("origin")
+                setup.remote_path = "/usr/bin:/bin"
+                calls = []
+                def remote(command, timeout=60, input=None):
+                    calls.append(command)
+                    if command == "uname -s": return Result(out=system + "\n")
+                    if command.endswith(hostname_command): return Result(out="New\n")
+                    if command == 'printf %s "$HOME"': return Result(out=home)
+                    if "command -v claude" in command: return Result(1)
+                    if "command -v " in command: return Result(out="/usr/bin/tool\n")
+                    self.fail("unexpected command: " + command)
+                setup.remote = remote
+                entry = setup.build_registry_entry()
+                self.assertEqual(entry["hostname_prefix"], "New")
+                self.assertEqual(entry["gui_cwd"], home + "/tmp")
+                self.assertEqual(entry["runtimes"], ["pi"])
+                self.assertEqual(entry["catalog_root"], "/catalog")
+                self.assertEqual(calls.count("uname -s"), 1)
+                self.assertEqual(setup.output.getvalue(), "")
+                self.assertFalse(setup.state_path.exists())
+
+    def test_local_os_does_not_select_remote_runtime_or_hostname_behavior(self):
+        for local in ("Darwin", "Linux"):
+            for target in ("Darwin", "Linux"):
+                with self.subTest(local=local, target=target):
+                    setup = self.make(local_system=local, no_wait=True, role="hub")
+                    setup.origin = setup.registry.get("origin")
+                    calls = []
+                    hostname_command = "scutil --get LocalHostName" if target == "Darwin" else "hostname -s"
+                    remote_home = "/Users/remote" if target == "Darwin" else "/home/remote"
+                    def remote(command, timeout=60, input=None):
+                        calls.append(command)
+                        if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
+                        if command == "uname -s": return Result(out=target + "\n")
+                        if command == 'printf %s "$HOME"': return Result(out=remote_home)
+                        command = command.removeprefix("PATH=/usr/bin:/bin ")
+                        if command == hostname_command: return Result(out="Target\n")
+                        if command == "command -v brew":
+                            self.assertEqual(target, "Darwin")
+                            return Result(out="/opt/homebrew/bin/brew\n")
+                        if command == "command -v claude": return Result(1)
+                        if command.startswith("command -v "): return Result(out="/usr/bin/tool\n")
+                        if command in ("pi list 2>/dev/null | grep -F gentle-pi", "herdr tab list"): return Result()
+                        self.fail("unexpected remote command: " + command)
+                    setup.remote = remote
+                    self.assertEqual(setup.runtimes(), ("ok", "required runtimes available"))
+                    entry = setup.build_registry_entry()
+                    self.assertEqual(entry["hostname_prefix"], "Target")
+                    self.assertEqual(entry["gui_cwd"], remote_home + "/tmp")
+                    log_directory = "Library/Logs/mac-agent-swarm" if local == "Darwin" else ".local/state/agent-swarm/logs"
+                    self.assertEqual(setup.log_path.parent, setup.home / log_directory)
+                    self.assertEqual(sum(command.endswith("command -v brew") for command in calls), 2 if target == "Darwin" else 0)
+                    self.assertEqual(calls.count("uname -s"), 1)
+                    self.assertEqual(setup.output.getvalue(), "")
+                    self.assertFalse(setup.state_path.exists())
+
+    def test_darwin_installs_missing_herdr_with_homebrew_from_either_origin(self):
+        for local in ("Darwin", "Linux"):
+            with self.subTest(local=local):
+                setup = self.make(local_system=local, no_wait=True, install_missing=True)
+                calls = []; installed = []
+                def remote(command, timeout=60, input=None):
+                    calls.append((command, timeout))
+                    if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
+                    if command == "uname -s": return Result(out="Darwin\n")
+                    command = command.removeprefix("PATH=/usr/bin:/bin ")
+                    if command in ("command -v herdr", "herdr tab list"): return Result(0 if installed else 1)
+                    if command == "brew install herdr": installed.append("herdr"); return Result()
+                    if command.startswith("command -v ") or command == "pi list 2>/dev/null | grep -F gentle-pi": return Result()
+                    self.fail("unexpected remote command: " + command)
+                setup.remote = remote
+                self.assertEqual(setup.runtimes(), ("changed", "installed herdr"))
+                self.assertEqual(installed, ["herdr"])
+                self.assertEqual([call for call in calls if " install " in call[0]], [("PATH=/usr/bin:/bin brew install herdr", 1200)])
+                self.assertEqual(setup.output.getvalue(), "")
+                self.assertFalse(setup.state_path.exists())
+
+    def test_invalid_remote_platform_output_fails_closed_before_runtime_probes(self):
+        for output in ("", "FreeBSD\n", "linux\n", "Linux\nDarwin\n"):
+            with self.subTest(output=output):
+                setup = self.make(no_wait=True, install_missing=True)
+                calls = []
+                def remote(command, timeout=60, input=None):
+                    calls.append(command)
+                    if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
+                    if command == "uname -s": return Result(out=output)
+                    self.fail("invalid platform must stop remote probes: " + command)
+                setup.remote = remote
+                with self.assertRaises(SetupError) as raised:
+                    setup.runtimes()
+                self.assertEqual(str(raised.exception), "Could not determine remote platform (expected Darwin or Linux)")
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[-1], "uname -s")
+                self.assertEqual(setup.output.getvalue(), "")
+                self.assertFalse(setup.state_path.exists())
+                self.assertEqual(setup.changed, [])
+                self.assertEqual(setup.results, [])
+
+    def test_remote_hostname_failure_rejects_empty_registry_prefix(self):
+        setup = self.make()
+        setup.remote_path = "/usr/bin:/bin"
+        setup.remote = lambda command, *args, **kw: Result(out="Linux\n") if command == "uname -s" else Result(1)
+        with self.assertRaisesRegex(SetupError, "Could not determine remote hostname"):
+            setup.remote_facts()
+
     def test_default_runner_runs_commands_once(self):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         home = Path(directory.name) / "home"; home.mkdir()

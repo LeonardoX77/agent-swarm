@@ -30,6 +30,7 @@ class FakeMacs:
         self.remote_home = Path(self.remote.name)
         self.port_open_after, self.authorized_after, self.keychain_after = 2, 2, 1
         self.port_polls = self.authorization_polls = self.keychain_polls = 0
+        self.system = "Darwin"
         self.tools = {"brew", "herdr", "node", "pi", "gentle-pi", "python3"}
         self.mounted = self.reverse_alias = self.update_installed = False
         self.update_calls, self.nonces = [], []
@@ -70,6 +71,8 @@ class FakeMacs:
             return Result(result.returncode, result.stdout, result.stderr)
         if command.startswith("PYTHONDONTWRITEBYTECODE=1 "):
             command = command.split(" ", 1)[1]
+        if command == "uname -s": return Result(out=self.system + "\n")
+        if command == "hostname -s": return Result(out="Bea\n")
         if command == 'printf %s "$HOME"': return Result(out=str(self.remote_home))
         if command == "true": return Result(0 if self.authorization_polls >= self.authorized_after else 1)
         if command.startswith("command -v "):
@@ -206,6 +209,24 @@ class SetupScenarioTests(unittest.TestCase):
         return {path.relative_to(root): (path.read_bytes(), path.stat().st_mode & 0o777)
                 for path in root.rglob("*") if path.is_file()}
 
+    def test_linux_preinstalled_runtimes_and_registry_facts(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.system = "Linux"; machines.tools.remove("brew")
+        setup, registry_path = self.make_setup(machines, no_wait=True, install_missing=True, role="hub")
+        setup.local_preflight()
+        before = registry_path.read_bytes()
+        self.assertEqual(setup.runtimes(), ("ok", "required runtimes available"))
+        entry = setup.build_registry_entry()
+        self.assertEqual(entry["hostname_prefix"], "Bea")
+        self.assertEqual(entry["gui_cwd"], str(machines.remote_home / "tmp"))
+        self.assertEqual(entry["catalog_root"], "/catalog")
+        self.assertEqual(entry["repo"], "/catalog/leo/mac-agent-swarm")
+        self.assertEqual(registry_path.read_bytes(), before)
+        self.assertEqual(setup.output.getvalue(), "")
+        self.assertFalse(any("command -v brew" in command or "brew install" in command for command in machines.remote_commands))
+        self.assertFalse(machines.mounted)
+        self.assertFalse(machines.update_installed)
+
     def test_zero_to_done_without_tty(self):
         machines, setup, registry_path = self.run_zero_to_done()
         summary = setup.output.getvalue()
@@ -264,6 +285,7 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertIn(public_line, setup.log_path.read_text())
         self.assertEqual((machines.remote_home / ".ssh/authorized_keys").read_text().count(public_line), 1)
 
+    @unittest.skipUnless(Path("/bin/zsh").is_file(), "requires /bin/zsh")
     def test_remote_path_discovery_ignores_missing_nvm_versions_in_zsh(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
         setup, _ = self.make_setup(machines)
