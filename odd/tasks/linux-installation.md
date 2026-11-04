@@ -6,12 +6,23 @@ Delivery strategy: single-pr. Test runner: `python3 -m unittest discover -s auto
 ## Specs
 
 S1. "crea una nueva rama y adapta la instalacion de agent-swarm en linux"
+S2. "se supone que había que adaptar swaagents-swarm a linux, cambia lo que sea necesario" (replaces the manual `--linux-catalog-root` contract: Linux must behave as close to macOS as possible.)
+S3. "swarm-smb-mount y swarm-update siguen siendo solo macOS. << adaptalos"
+S4. "swarm-delegate fija /usr/bin/python3 en el destino." (user: "arreglalo" implied by the list; macOS behavior must stay identical.)
+S5. "La coincidencia de hostname_prefix con hostname -s en WSL (mayúsculas/minúsculas) no está probada. << pruebala"
+S6. "4 pruebalo. pruebalo todo y que sea lo más parecido a la version macos" (gui_cwd = $HOME/tmp must be tested; test everything.)
+S7. "6 quita las redundancias" (redundant tests), "7 arregla lo que creas" (normalize paths), "8 arreglalo" (SyntaxWarning), "3 ok" (neutral Remote Login message), "5. da igual , arregla lo que sea en proximos commits y commitea".
 
 ## Tasks
 
 - T1 | S1 | delegated | done | Portable Linux/WSL setup core and OS-matrix regression coverage verified (50 focused tests, 1 skipped); commit: `a13062a`.
 - T2 | S1 | delegated | done | Manual Linux/WSL catalog boundary and platform-specific service avoidance verified (59 focused tests, 1 skipped); commit: `82a4818`.
-- T3 | S1 | delegated | done | Linux/WSL documentation and full-suite test isolation/platform expectations verified (131 tests passed, 1 skipped); commit: HEAD.
+- T3 | S1 | delegated | done | Linux/WSL documentation and full-suite test isolation/platform expectations verified (131 tests passed, 1 skipped); commit: `38dd25a`.
+- T4 | S2,S6,S7 | delegated | done | Linux SMB mount (swarm-smb-mount Linux backend + setup integration replacing `--linux-catalog-root`), Linux update phase, neutral Remote Login text, SyntaxWarning, redundant-test cleanup, gui_cwd tests; commit pending.
+- T5 | S3 | delegated | done | swarm-update Linux backend (systemd --user timer), identical CLI/JSON contract; commit pending.
+- T6 | S4,S5 | delegated | done | swarm-delegate python resolution and case-insensitive hostname_prefix matching with real hostname tests; commit pending.
+- T7 | S2,S3 | delegated | done | Linux/WSL documentation updated to the new design (7 files); commit pending.
+- T8 | S6 | inline | done | Real verification on this WSL: swarm-update via real systemd --user (installed, run, status, uninstalled), swarm-smb-mount against a temporary loopback Samba share (port 1445 because Windows owns 445) with persistence and full revert, real hostname resolution for 5CG6031YZW. Not run: real swarm-setup add-host over SSH (consent unanswered), delegation to Linux. Packages cifs-utils and samba remain installed; commit pending.
 
 ## Log
 
@@ -40,3 +51,19 @@ cual es el primer paso?"
 - L14 | T3 documentation review and `git diff --check` passed. Full suite ran 130 tests: 15 errors caused by missing ignored `config/hosts.json` in `test_herdr_task`, 2 `test_smb_mount` failures because Linux returns `unsupported_platform`, 1 skipped (`/bin/zsh` unavailable). Earlier baseline comparison identified the same failure families; no documentation change caused them. Scope decision required before treating T3 as verified.
 - L15 | User decision: "Corregir la suite ahora (recomendado)". Scope expands to repair the failing test isolation and platform expectations before closing.
 - L16 | T3 documentation was reviewed. Test fixture repairs were observed RED then GREEN. Final checks: `git diff --check` passed; full suite passed with 131 tests and 1 skip (`/bin/zsh` unavailable). Existing warnings: `SyntaxWarning` in `swarm_setup.py`, importlib `DeprecationWarning`, and tarfile `DeprecationWarning`.
+- L17 | User corrections (verbatim, 2026-11-03): "1 ok
+2  El rechazo a macOS llega tarde. --linux-catalog-root contra << no se de que va esto. se supone que había que adaptar swaagents-swarm a linux, cambia lo que sea necesario
+3 ok
+4 pruebalo. pruebalo todo y que sea lo más parecido a la version macos
+5. da igual , arregla lo que sea en proximos commits y commitea
+6 quita las redundancias
+7 arregla lo que creas
+8 arreglalo
+ - swarm-delegate fija /usr/bin/python3 en el destino.
+ - swarm-smb-mount y swarm-update siguen siendo solo macOS. << adaptalos
+- La coincidencia de hostname_prefix con hostname -s en WSL (mayúsculas/minúsculas) no está probada. << pruebala"
+- L18 | Decision: item 1 (untrack this doc) was REVERTED: the repo already tracks nine other `odd/tasks/*.md` files, so keeping it tracked follows the project convention (my earlier review claim was wrong). Design: Linux SMB uses cifs via a user-mountable fstab entry (human adds it with root, credentials file mode 600 created by the human; tool never uses sudo or handles passwords), mount point `/mnt/<share>`, persistence through systemd --user timer degrading with a warning when unavailable; `--linux-catalog-root` is removed. Facts: this WSL has sudo -n, systemd --user running, no cifs-utils/samba/herdr; herdr ships a Linux installer (`curl -fsSL https://herdr.dev/install.sh | sh`).
+- L19 | T4-T7 implemented by workers; parent reviewed each diff. Host-write test could not be delegated (worker refused: write boundary limited to the evidence file), so the parent ran the real SMB test inline after the user answered "Sí, instalar y probar". Independent verifier for T4-T6 still pending at this point. Parent fix: restored the original behavior of identical hostname prefixes in `host_registry` (only case-variant ambiguity is rejected).
+- L20 | Interim verifier findings (task mw1vaqdx-3-35nh, offline `systemd-analyze verify` on scratch units): BLOCKER in `swarm-smb-mount` Linux units: `StandardOutput=append:"/abs/path"` / `StandardError` are emitted with quotes so systemd warns `path is not absolute` and the documented log files are ignored; with a home containing space, `%` and `$`, ExecStart argv[0] keeps `$$` (systemd does not dollar-expand the executable) and the command is not executable. ADVISORY pending severity: `unmount --remove-persistent` returns ok/persistent_removed true and deletes units even when `systemctl --user disable --now` fails. `swarm-update` units verify clean. Fixes to be applied by the T4 worker after the final verdict.
+- L21 | Independent verification (tasks mw1vaqdx-3-35nh then mw1vqkcm-5-ltm5): T5 and T6 PASS; T4 had 4 blockers (dry-run ran installers, SMB unit log directives invalid, `$` in HOME broke ExecStart, setup hid the persistence warning) plus a remove-persistent advisory, all fixed (worker mw1vj0k4-4-185x) and re-verified: dry-run never installs on Linux or macOS (macOS `brew install herdr` also ran in dry-run at origin/main, now fixed on both), systemd-analyze verify clean (exit 0, empty stderr) for normal and `space % $ home` HOME, warning surfaced, failed disable keeps units. T7 docs fixed after the re-verification (journald fallback, README persistence degradation, installer wording). Final full suite with `-W error::SyntaxWarning`: 146 tests OK, 1 skipped (`/bin/zsh` absent). Real checks on this WSL (all reverted): swarm-update via systemd --user, swarm-smb-mount against a temporary loopback Samba share (port 1445), SMB unit logs written, hostnames. Not validated: real `swarm-setup add-host` over SSH, delegation to a Linux host, native macOS runs. cifs-utils and samba remain installed on this WSL.
+

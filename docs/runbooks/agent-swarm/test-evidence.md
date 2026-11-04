@@ -9,6 +9,19 @@
 - Los nombres de tabs, panes, PIDs, nonces y rutas temporales son identificadores históricos, no valores reutilizables.
 - Las observaciones no sustituyen el registro actual, una huella verificada, login de Pi, un montaje SMB ni una aceptación del canal.
 
+## Evidencia Linux/WSL
+
+Observaciones reales comunicadas por el responsable de la prueba en este host: Ubuntu 24.04, kernel 6.18 WSL2 y `systemd --user` en ejecución. No equivalen a una validación de delegación Linux de extremo a extremo.
+
+| Área | Resultado observado | Alcance |
+| --- | --- | --- |
+| `swarm-update` | **PASS**: install/run/status/uninstall mediante systemd de usuario real; calendario de prueba retirado al terminar. | Valida el ciclo del servicio, no todas las actualizaciones de componentes. |
+| `swarm-smb-mount` | **PASS**: status, mount `--persistent`, status, lectura, escritura, unmount y `--remove-persistent`, sin sudo en la herramienta. El timer volvió a montar tras desmontar. | Recurso Samba temporal en loopback, con cifs-utils y Samba instalados; `127.0.0.1:1445` porque Windows ocupaba 445. Se usó la línea de `fstab-line` añadiendo `port=1445` para la prueba; la preparación privilegiada fue externa a la herramienta. |
+| Rechazo seguro SMB | **PASS**: un montaje sin entrada fstab falló con `fstab_entry_required`. | No demuestra compatibilidad con cualquier servidor SMB. |
+| Identificación de host | **PASS**: el prefijo `5CG6031YZW` coincidió en forma exacta, minúsculas, mayúsculas y FQDN; nombres ajenos no coincidieron. | Comprueba la comparación sin distinguir mayúsculas, no una delegación. |
+
+**No validado:** `swarm-setup add-host` completo entre dos máquinas reales; delegación de tareas con `swarm-delegate` hacia Linux; ejecución del código nuevo en macOS (cubierta sólo por los tests simulados existentes y una comparación diferencial contra `origin/main`); servidores cuyo dialecto SMB mínimo sea 3.1.1 (la línea fstab generada usa `vers=3.0`).
+
 ## Observaciones útiles de Herdr + Pi
 
 | Área | Observación histórica | Límite |

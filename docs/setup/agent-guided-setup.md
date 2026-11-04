@@ -1,12 +1,12 @@
 # Instalación guiada de Agent Swarm
 
-La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente. Linux/WSL requiere runtimes y catálogo aprovisionados manualmente; su delegación de extremo a extremo no se ha validado.
+La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente. Linux/WSL ejecuta las mismas diez fases con CIFS y timers systemd de usuario; su delegación de extremo a extremo no se ha validado.
 
 ## Camino rápido
 
 1. Confirme que el origen figura en `config/hosts.json` (registro local no versionado; cree uno desde `config/hosts.example.json` si falta) y ejecute el comando desde su checkout local.
-2. Ejecute el procedimiento descrito en [Agregar un equipo](add-host.md#camino-rápido) con el nombre, dirección y usuario del equipo nuevo. Para Linux/WSL, siga primero el [aprovisionamiento manual](add-host.md#linuxwsl-aprovisionamiento-manual).
-3. Complete las pausas locales: acceso SSH, comparación de huella y login de Pi; en macOS, también Remote Login y primer acceso SMB desde Finder.
+2. Ejecute el procedimiento descrito en [Agregar un equipo](add-host.md#camino-rápido) con el nombre, dirección y usuario del equipo nuevo. Para Linux/WSL, siga primero [la preparación](add-host.md#linuxwsl-preparación).
+3. Complete las pausas locales: acceso SSH, comparación de huella y login de Pi; para SMB, Finder/Keychain en macOS o fstab y credenciales locales en Linux.
 4. Repita el mismo comando con las mismas opciones hasta que la aceptación bidireccional termine correctamente.
 5. Antes de delegar trabajo, ejecute `swarm-delegate preflight <destino>` y siga el [runbook de validación](../runbooks/agent-swarm/validation.md).
 
@@ -14,22 +14,23 @@ El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determin
 
 ## Linux/WSL antes del alta
 
-- Preinstale Node, Python 3, Pi, gentle-pi y Herdr; deje disponible el servidor Herdr y complete el login de Pi en el destino. No se requiere Homebrew.
-- Para un spoke, monte el catálogo por su cuenta y pase `--linux-catalog-root /mnt/shared-projects`. La ruta debe ser absoluta en el destino y contener el proyecto en la misma ruta relativa al catálogo que el repositorio de origen.
-- El setup no monta SMB, no gestiona sus credenciales y no instala un servicio de actualización automática en Linux/WSL; mantenga esos recursos manualmente.
+- Prepare SSH, Node, Python 3 y Pi; deje disponible el servidor Herdr y complete el login de Pi localmente. `--install-missing` puede añadir Herdr con el instalador oficial de https://herdr.dev/install.sh (descargado a un archivo temporal y ejecutado solo si la descarga tuvo éxito; requiere curl) y gentle-pi mediante Pi. No se requiere Homebrew.
+- Para un spoke, use `swarm-smb-mount fstab-line --host H --share S --user U`. Una persona añade la línea exacta a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup monta y configura un timer de usuario cada 300 s; si no hay `systemctl --user`, advierte que no activó la persistencia.
+- La actualización diaria usa `agent-swarm-update.timer`, salvo `--no-auto-update`. En WSL, habilite `[boot]` / `systemd=true` en `/etc/wsl.conf`; los timers requieren sesión de usuario salvo que active `loginctl enable-linger $USER`.
+- Un hub Linux debe publicar manualmente el catálogo mediante su propio servidor SMB (por ejemplo Samba); el setup no lo configura. Windows puede ocupar el puerto TCP 445 en loopback: use otro puerto para una prueba SMB local.
 
-La opción sólo admite spokes Linux/WSL: otros roles fallan en el preflight local; un destino macOS falla después de autenticar SSH y detectar su plataforma. En ese último caso pueden quedar artefactos locales del bootstrap SSH, pero no se continúa con SMB, registro ni configuración remota del host. Consulte [los detalles](add-host.md#linuxwsl-aprovisionamiento-manual) antes de reintentar.
+Consulte [los detalles de preparación](add-host.md#linuxwsl-preparación) y [la evidencia y sus límites](../runbooks/agent-swarm/test-evidence.md#evidencia-linuxwsl) antes de delegar.
 
 ## Pausas humanas
 
-La tabla siguiente describe macOS. En Linux/WSL, prepare SSH y el catálogo manualmente antes del alta; las verificaciones de huella y login siguen siendo necesarias.
+Las verificaciones de huella y login son comunes. Las acciones SSH y SMB dependen de la plataforma:
 
 | Momento | Acción local | Confirmación segura |
 | --- | --- | --- |
-| Acceso remoto | Active Remote Login para la cuenta registrada y confirme la red elegida. | El puerto SSH responde desde el origen. |
+| Acceso remoto | Active Remote Login en macOS o un `sshd` en Linux para la cuenta registrada; confirme la red. | El puerto SSH responde desde el origen. |
 | Huella SSH | Compare la huella vista en el host con el escaneo desde el origen. | Coinciden; `StrictHostKeyChecking` sigue activo. |
 | Runtimes y login | Instale lo aprobado y complete el login de Pi desde la GUI cuando se solicite. | Los checks encuentran Pi, gentle-pi y Herdr. |
-| SMB | En Finder, conecte a la URL que muestra el setup; guarde la contraseña sólo en Keychain si corresponde. | El catálogo registrado aparece en el spoke. |
+| SMB | macOS: Finder y Keychain. Linux: entrada fstab y archivo de credenciales protegido; ejecute el montaje indicado. | El catálogo registrado aparece en el spoke. |
 | Aceptación | Resuelva `Not logged in` desde la GUI indicada y reanude el mismo setup. | Preflight y aceptación terminan en ambos sentidos. |
 
 ## Límites
