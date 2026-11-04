@@ -1,6 +1,6 @@
 # Agregar un equipo al canal Agent Swarm
 
-El camino canónico para incorporar un equipo macOS o Linux/WSL es ejecutar **un único comando** desde un nodo ya registrado. `swarm-setup` coordina las diez fases, se detiene ante acciones humanas y conserva el estado para reanudar la misma operación. Linux/WSL ejecuta las mismas diez fases, con CIFS y timers systemd de usuario; no se ha validado la delegación de extremo a extremo en esa plataforma.
+El camino canónico para incorporar un equipo macOS o Linux/WSL es ejecutar **un único comando** desde un nodo ya registrado. `swarm-setup` coordina las diez fases, se detiene ante acciones humanas y conserva el estado para reanudar la misma operación. Linux/WSL ejecuta las mismas diez fases, con CIFS y timers systemd de usuario; se ha probado una delegación real hacia este WSL, pero no la aceptación bidireccional entre dos máquinas (véase la evidencia enlazada abajo).
 
 ## Camino rápido
 
@@ -20,7 +20,7 @@ automation/agent-swarm/bin/swarm-setup add-host \
   [--update-time 04:30 | --no-auto-update] [--verbose]
 ```
 
-El valor predeterminado instala la actualización diaria a las `04:30`; use `--no-auto-update` si no quiere activar ese calendario. Esto no instala un chequeo de actualizaciones al primer uso remoto: es una funcionalidad distinta. Agent Swarm no gestiona ni garantiza los avisos de paquetes que pueda mostrar Pi al iniciarse. `--install-missing` aprovecha las herramientas ya instaladas y sólo intenta añadir Herdr y gentle-pi cuando sus CLI base están disponibles: no reinstala todo el Mac. El proceso muestra un resumen breve en inglés; por ejemplo:
+El valor predeterminado instala la actualización diaria a las `04:30`; use `--no-auto-update` si no quiere activar ese calendario. Esto no instala un chequeo de actualizaciones al primer uso remoto: es una funcionalidad distinta. Agent Swarm no gestiona ni garantiza los avisos de paquetes que pueda mostrar Pi al iniciarse. `--install-missing` aprovecha las herramientas ya instaladas y sólo intenta añadir Herdr, gentle-pi y la integración oficial de Herdr para Pi cuando sus CLI base están disponibles: no reinstala todo el Mac. El proceso muestra un resumen breve en inglés; por ejemplo:
 
 ```text
 [ 1/10] local-preflight OK       origin preflight passed
@@ -33,9 +33,33 @@ Al completar con éxito termina con salida `0`. Revise la entrada que el setup a
 
 > Si se interrumpe o espera a una persona, ejecute **el mismo comando con las mismas opciones** otra vez desde el origen. Comprueba de nuevo cada fase y conserva lo ya configurado; no genere otra huella ni acepte una distinta sin verificarla localmente.
 
+## Runtime prerequisites (macOS and Linux)
+
+The official Herdr Pi integration is required, not just gentle-pi. Check it with
+`herdr integration status` (`pi: not installed` is not ready), or install it with
+`herdr integration install pi`. It installs `~/.pi/agent/extensions/herdr-agent-state.ts`.
+The adapter proves ownership through `agent_session` (kind `path`, source `herdr:pi`);
+without that integration, submit can return `unknown` without delivering the prompt.
+`--install-missing` installs it when herdr is available and reports
+`installed herdr pi integration`; dry-run only reports the planned install.
+
+On headless Linux, start the server by running `herdr` in a normal terminal and
+then detaching, or use a pty with a non-zero grid (rows and columns). Herdr 0.9.5
+rejects a zero-sized terminal with `cannot attach without a usable terminal: terminal reported a zero-sized grid`.
+The server survives the client exiting. There is no `herdr server start` command
+in that version (`server` only offers `stop` and `reload-config`). Check readiness
+with `herdr tab list`; `server_not_running` means the server still needs starting.
+The setup never starts or restarts it automatically.
+
+Both setup and swarm-update discover `$HOME/.pi/agent/bin` (Pi's own installer),
+immediately after `$HOME/.local/bin`, retaining the existing Homebrew, nvm,
+Hermes and system directories and their order. No interactive shell profile is needed.
+
 ## Linux/WSL: preparación
 
 Active SSH y prepare Node, Python 3 y Pi en el destino, con login de Pi local y el servidor Herdr disponible (`herdr tab list`). Homebrew no es requisito. Con `--install-missing`, el setup puede instalar Herdr mediante el instalador oficial de https://herdr.dev/install.sh (lo descarga a un archivo temporal con `curl -fsSL`, lo ejecuta solo si la descarga tuvo éxito y borra el archivo; requiere curl), y gentle-pi mediante `pi install npm:gentle-pi` si existe Pi; no instala Node, Python ni Pi.
+
+En WSL, Windows OpenSSH suele ocupar el puerto 22: si el `sshd` de WSL escucha, por ejemplo, en `127.0.0.1:2222`, use `--address 127.0.0.1 --ssh-port 2222` desde un origen que pueda alcanzar esa dirección. Use `--origin-ssh-port 2222` si el destino debe volver al origen por ese puerto. Ambos valores predeterminados son 22. El alias de SSH config lleva el puerto (`Port` sólo si no es 22); el esquema del registro no cambia. Reanude con los mismos puertos: cambiarlos provoca un error de conflicto de alias, nunca una sobrescritura silenciosa.
 
 Para un spoke, prepare el acceso CIFS siguiendo [Montaje SMB](../runbooks/agent-swarm/smb-mount.md#linuxwsl-preparación): `swarm-smb-mount fstab-line --host H --share S --user U` imprime la línea exacta y la plantilla de credenciales. Una persona añade la línea a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup ejecuta el montaje y activa un timer de usuario cada 300 s; si `systemctl --user` no está disponible, el montaje puede funcionar pero la persistencia se degrada con una advertencia.
 
@@ -61,7 +85,7 @@ Los nombres de fase siguientes son los que imprime el programa exactamente. Amba
 | `local-preflight` | Valida nombre, dirección, herramientas SSH y que el origen sea el `self_host` del registro. | Agente | No espera a una persona. |
 | `remote-login` | Comprueba que el puerto SSH del equipo nuevo sea alcanzable. | Persona | `On <name>: enable macOS Remote Login or a running sshd on Linux for user <user>` |
 | `ssh-to-new` | Crea o reutiliza la clave origen→nuevo, verifica la huella, configura `known_hosts`, autoriza la clave y crea `swarm-<name>`. | Persona y agente | Huella en TTY: `Type the fingerprint shown on <name> (or yes): `; clave: `On <name> run this exact command, then continue:` seguido del comando de autorización. |
-| `runtimes` | Comprueba Node, Python, Herdr, Pi, gentle-pi, el servidor Herdr y, sólo en macOS, Homebrew; con `--install-missing` intenta instalar sólo Herdr y gentle-pi cuando sus precondiciones ya existen. | Persona | `On <name>: install missing runtimes and log Pi in once from the GUI` |
+| `runtimes` | Comprueba Node, Python, Herdr, Pi, gentle-pi, la integración Herdr Pi, el servidor Herdr y, sólo en macOS, Homebrew; `--install-missing` puede añadir Herdr, gentle-pi y la integración. | Persona | macOS conserva `On <name>: install missing runtimes and log Pi in once from the GUI` y añade `; missing probes: <nombres>`; Linux usa `locally` en vez de `from the GUI` y añade instrucciones de arranque si falta `herdr-server`.  |
 | `ssh-to-origin` | Configura el canal SSH inverso nuevo→origen, incluida la huella del origen y el alias remoto. | Agente | No espera a una persona. Un conflicto de huella o alias falla de forma segura. |
 | `mount` | En un `spoke`, copia la utilidad de montaje e instala el montaje SMB persistente usando `share` del registro. | Persona | macOS: `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password`; Linux: instrucciones fstab y credenciales generadas para el destino. |
 | `registry` | Descubre datos del nuevo host y escribe su entrada en `config/hosts.json`. | Agente | No espera a una persona. |
@@ -81,7 +105,7 @@ El proceso comprueba las condiciones cada **5 segundos**, hasta `--wait-timeout`
 
 **La persona hace:** en el Mac nuevo abre **System Settings → General → Sharing → Remote Login**, lo activa y autoriza a `<user>`. En Linux, prepara un `sshd` en ejecución para esa cuenta. También confirma que la red elegida es la correcta.
 
-**Continúa cuando:** el puerto 22 responde desde el origen.
+**Continúa cuando:** el puerto elegido con `--ssh-port` (22 por defecto) responde desde el origen.
 
 ### Huella del host
 
@@ -107,11 +131,11 @@ Compárela con la huella observada desde el origen. Puede pasar el valor ya veri
 
 ### Runtimes y login GUI
 
-**El script muestra:** `On <name>: install missing runtimes and log Pi in once from the GUI`.
+**El script muestra:** en macOS, `On <name>: install missing runtimes and log Pi in once from the GUI; missing probes: <nombres>`. En Linux, indica login local y cómo arrancar Herdr si falta el servidor. Los nombres de probes son `herdr`, `node`, `pi`, `python3`, `gentle-pi`, `herdr-server`, `herdr-pi-integration` y, sólo en macOS, `brew`.
 
 **La persona hace:** instala Node, Python 3, Pi, gentle-pi y Herdr si faltan (Homebrew sólo en macOS); abre Herdr y abre Pi en la sesión GUI para completar el login del proveedor. Claude no es requisito. Con `--install-missing`, el script intenta `brew install herdr` en macOS si Homebrew responde, el instalador oficial de Herdr en Linux si curl responde y `pi install npm:gentle-pi` si Pi responde: no instala Homebrew, Node ni Pi.
 
-**Continúa cuando:** las comprobaciones remotas encuentran `node`, `python3`, `herdr`, `pi`, gentle-pi (y `brew` sólo en macOS), y `herdr tab list` funciona.
+**Continúa cuando:** las comprobaciones remotas encuentran `node`, `python3`, `herdr`, `pi`, gentle-pi (y `brew` sólo en macOS), `herdr integration status` confirma la integración Pi, y `herdr tab list` funciona.
 
 > Para SSH no interactivo, el script descubre directorios de herramientas habituales, incluido el `default` de `nvm` (o la versión Node instalada más alta), y usa ese `PATH` para las comprobaciones y herramientas posteriores.
 
@@ -141,7 +165,9 @@ En Linux, siga la preparación CIFS anterior y ejecute el comando de montaje que
 | `--role {hub,spoke}` | Rol del nuevo host; el predeterminado es `spoke`. |
 | `--host-fingerprint SHA256:...` | Huella previamente verificada; evita la pregunta de TTY. |
 | `--origin-user USER` | Cuenta que usará el canal inverso hacia el origen. |
-| `--install-missing` | Herdr: Homebrew en macOS o instalador oficial vía curl en Linux; gentle-pi: mediante Pi en ambas plataformas. |
+| `--ssh-port PORT` | Puerto del sshd del destino; entero de 1 a 65535, predeterminado 22. |
+| `--origin-ssh-port PORT` | Puerto del sshd del origen al que se conecta el destino; entero de 1 a 65535, predeterminado 22. |
+| `--install-missing` | Herdr: Homebrew en macOS o instalador oficial vía curl en Linux; gentle-pi: mediante Pi; integración Pi: `herdr integration install pi`, en ambas plataformas. |
 | `--auto-update` / `--no-auto-update` | Activa (predeterminado) u omite el calendario diario: launchd en macOS, systemd de usuario en Linux. |
 | `--update-time HH:MM` | Hora diaria en ambas plataformas; el predeterminado es `04:30`. |
 | `--skip-live` | Omite las pruebas de tareas vivas de aceptación, pero conserva los preflight. |

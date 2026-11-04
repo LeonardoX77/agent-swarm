@@ -1,6 +1,6 @@
 # Instalación guiada de Agent Swarm
 
-La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente. Linux/WSL ejecuta las mismas diez fases con CIFS y timers systemd de usuario; su delegación de extremo a extremo no se ha validado.
+La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente. Linux/WSL ejecuta las mismas diez fases con CIFS y timers systemd de usuario; se ha probado una delegación real hacia este WSL, pero la aceptación bidireccional entre dos máquinas sigue sin validarse.
 
 ## Camino rápido
 
@@ -15,6 +15,9 @@ El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determin
 ## Linux/WSL antes del alta
 
 - Prepare SSH, Node, Python 3 y Pi; deje disponible el servidor Herdr y complete el login de Pi localmente. `--install-missing` puede añadir Herdr con el instalador oficial de https://herdr.dev/install.sh (descargado a un archivo temporal y ejecutado solo si la descarga tuvo éxito; requiere curl) y gentle-pi mediante Pi. No se requiere Homebrew.
+- En ambas plataformas es obligatoria la integración oficial de Herdr para Pi: `herdr integration status` debe confirmar Pi instalado. `--install-missing` ejecuta `herdr integration install pi` si Herdr está disponible (dry-run sólo anuncia el plan); instala `~/.pi/agent/extensions/herdr-agent-state.ts`. Sin ella falta la prueba de propiedad `agent_session` de tipo `path` y fuente `herdr:pi`: submit puede quedar `unknown` sin entregar el prompt.
+- Para arrancar Herdr sin GUI en Linux, ejecute `herdr` en una terminal normal y desacople el cliente, o use una pty con filas y columnas no nulas. El servidor sobrevive a la salida del cliente. Herdr 0.9.5 rechaza una terminal con cuadrícula cero (`cannot attach without a usable terminal: terminal reported a zero-sized grid`) y no tiene `herdr server start` (sólo `server stop` y `server reload-config`). Compruebe `herdr tab list`; `server_not_running` indica que falta arrancarlo. La espera muestra los nombres de probes ausentes y las instrucciones de arranque cuando falta `herdr-server`.
+- Setup y swarm-update descubren `$HOME/.pi/agent/bin`, donde instala Pi su instalador, inmediatamente después de `$HOME/.local/bin`; conservan las demás rutas y su orden.
 - Para un spoke, use `swarm-smb-mount fstab-line --host H --share S --user U`. Una persona añade la línea exacta a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup monta y configura un timer de usuario cada 300 s; si no hay `systemctl --user`, advierte que no activó la persistencia.
 - La actualización diaria usa `agent-swarm-update.timer`, salvo `--no-auto-update`. En WSL, habilite `[boot]` / `systemd=true` en `/etc/wsl.conf`; los timers requieren sesión de usuario salvo que active `loginctl enable-linger $USER`.
 - Un hub Linux debe publicar manualmente el catálogo mediante su propio servidor SMB (por ejemplo Samba); el setup no lo configura. Windows puede ocupar el puerto TCP 445 en loopback: use otro puerto para una prueba SMB local.
@@ -29,7 +32,7 @@ Las verificaciones de huella y login son comunes. Las acciones SSH y SMB depende
 | --- | --- | --- |
 | Acceso remoto | Active Remote Login en macOS o un `sshd` en Linux para la cuenta registrada; confirme la red. | El puerto SSH responde desde el origen. |
 | Huella SSH | Compare la huella vista en el host con el escaneo desde el origen. | Coinciden; `StrictHostKeyChecking` sigue activo. |
-| Runtimes y login | Instale lo aprobado y complete el login de Pi desde la GUI cuando se solicite. | Los checks encuentran Pi, gentle-pi y Herdr. |
+| Runtimes y login | Instale lo aprobado y complete el login de Pi desde la GUI cuando se solicite. | Los checks encuentran Pi, gentle-pi, Herdr, su servidor y la integración oficial Pi. |
 | SMB | macOS: Finder y Keychain. Linux: entrada fstab y archivo de credenciales protegido; ejecute el montaje indicado. | El catálogo registrado aparece en el spoke. |
 | Aceptación | Resuelva `Not logged in` desde la GUI indicada y reanude el mismo setup. | Preflight y aceptación terminan en ambos sentidos. |
 

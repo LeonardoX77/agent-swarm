@@ -11,7 +11,7 @@
 
 ## Evidencia Linux/WSL
 
-Observaciones reales comunicadas por el responsable de la prueba en este host: Ubuntu 24.04, kernel 6.18 WSL2 y `systemd --user` en ejecución. No equivalen a una validación de delegación Linux de extremo a extremo.
+Observaciones reales comunicadas por el responsable de la prueba en este host: Ubuntu 24.04, kernel 6.18 WSL2 y `systemd --user` en ejecución. El alcance de cada prueba se distingue a continuación; una delegación real hacia WSL no valida la aceptación bidireccional de dos máquinas.
 
 | Área | Resultado observado | Alcance |
 | --- | --- | --- |
@@ -20,7 +20,18 @@ Observaciones reales comunicadas por el responsable de la prueba en este host: U
 | Rechazo seguro SMB | **PASS**: un montaje sin entrada fstab falló con `fstab_entry_required`. | No demuestra compatibilidad con cualquier servidor SMB. |
 | Identificación de host | **PASS**: el prefijo `5CG6031YZW` coincidió en forma exacta, minúsculas, mayúsculas y FQDN; nombres ajenos no coincidieron. | Comprueba la comparación sin distinguir mayúsculas, no una delegación. |
 
-**No validado:** `swarm-setup add-host` completo entre dos máquinas reales; delegación de tareas con `swarm-delegate` hacia Linux; ejecución del código nuevo en macOS (cubierta sólo por los tests simulados existentes y una comparación diferencial contra `origin/main`); servidores cuyo dialecto SMB mínimo sea 3.1.1 (la línea fstab generada usa `vers=3.0`).
+### Alta real por SSH y delegación hacia este WSL
+
+Evidencia comunicada por el responsable de la ejecución real (no repetida por los tests simulados):
+
+- **PASS parcial, fases 1–9:** `swarm-setup add-host` por SSH real a este WSL con `--ssh-port 2222 --origin-ssh-port 2222` completó la comprobación de huella, el paso humano de `authorized_keys`, la instalación de Herdr 0.9.5 por `--install-missing`, el montaje CIFS real mediante la fase de montaje del setup contra un recurso Samba temporal en loopback, la entrada de registro con catálogo `/mnt/agent-projects`, la copia de la skill y el timer systemd de actualización. Hubo dos pasos humanos adicionales: arrancar el servidor Herdr y hacer visible `pi`. El cambio posterior añade diagnóstico de probes, instrucciones de arranque y descubrimiento de `$HOME/.pi/agent/bin` junto a `$HOME/.local/bin` en setup y swarm-update.
+- **FAIL esperado, fase 10:** la aceptación falló con `SELF_TARGET` porque origen y destino eran el mismo host. La aceptación bidireccional **no** está validada mediante este loopback de un solo host.
+- **PASS, delegación real separada:** `swarm-delegate submit/recover/close` desde el hub al nodo Linux devolvió el nonce exacto y cerró sólo su propia tab. Antes de instalar la integración oficial Herdr Pi, submit devolvió `unknown` y el prompt nunca fue entregado (comportamiento documentado del adaptador, no éxito de envío).
+- **Hallazgo SSH:** Windows OpenSSH ocupaba TCP 22 en todas las direcciones locales del host; por eso se añadieron `--ssh-port` y `--origin-ssh-port`, sin cambiar sus valores predeterminados de 22.
+- **Prerrequisito de propiedad:** `herdr integration install pi` instala `~/.pi/agent/extensions/herdr-agent-state.ts`; `herdr integration status` permite comprobarlo. Sin esa integración Herdr no aporta `agent_session` de tipo `path`, fuente `herdr:pi`, necesario para demostrar propiedad antes de enviar el prompt. El setup ahora lo sondea como `herdr-pi-integration` y `--install-missing` puede instalarlo en ambas plataformas; dry-run sólo informa.
+- **Arranque headless:** `herdr tab list` devolvía `server_not_running`. Herdr 0.9.5 rechazó una terminal de tamaño cero con `cannot attach without a usable terminal: terminal reported a zero-sized grid`. Se puede iniciar con `herdr` en una terminal normal y desacoplar, o con una pty de filas y columnas no nulas; el servidor sobrevive a la salida del cliente. No existe `herdr server start`: esa versión sólo ofrece `server stop` y `server reload-config`.
+
+**No validado:** aceptación bidireccional entre dos máquinas reales; ejecución nativa del código nuevo en macOS (sólo tests simulados y comparación diferencial contra `origin/main`); un nodo Linux alcanzado por una red real desde un hub macOS; servidores cuyo dialecto SMB mínimo sea 3.1.1 (la línea fstab generada usa `vers=3.0`).
 
 ## Observaciones útiles de Herdr + Pi
 
