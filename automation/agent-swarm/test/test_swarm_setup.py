@@ -1,7 +1,6 @@
 import io
+import os
 import json
-import runpy
-from unittest.mock import patch
 import subprocess
 import tempfile
 import unittest
@@ -74,35 +73,73 @@ class SetupTests(unittest.TestCase):
                 self.assertEqual(setup.log_path.read_text(), "progress\n")
                 self.assertEqual(setup.output.getvalue(), "progress\n")
 
-    def test_linux_runtimes_do_not_require_or_install_homebrew(self):
-        setup = self.make(no_wait=True, install_missing=True)
-        calls = []
-        def remote(command, timeout=60, input=None):
-            calls.append(command)
-            if command == "uname -s": return Result(out="Linux\n")
-            if command.startswith("# agent-swarm-path"): return Result(out="/usr/local/bin:/usr/bin:/bin\n")
-            if "brew" in command: return Result(1)
-            return Result()
-        setup.remote = remote
-        self.assertEqual(setup.runtimes(), ("ok", "required runtimes available"))
-        self.assertFalse(any("command -v brew" in command or "brew install" in command for command in calls))
-        self.assertEqual(setup.output.getvalue(), "")
-        self.assertFalse(setup.state_path.exists())
+    def test_linux_herdr_installer_requires_curl_and_install_missing(self):
+        for enabled, curl in ((True, True), (True, False), (False, True)):
+            with self.subTest(enabled=enabled, curl=curl):
+                setup = self.make(no_wait=True, install_missing=enabled)
+                calls = []; installed = []
+                def remote(command, timeout=60, input=None):
+                    calls.append((command, timeout))
+                    if command == "uname -s": return Result(out="Linux\n")
+                    if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
+                    command = command.removeprefix("PATH=/usr/bin:/bin ")
+                    if command == "command -v curl": return Result(0 if curl else 1)
+                    if command in ("command -v herdr", "herdr tab list"): return Result(0 if installed else 1)
+                    if 'curl -fsSL https://herdr.dev/install.sh -o "$tmp"' in command:
+                        installed.append(True); return Result()
+                    return Result()
+                setup.remote = remote
+                if enabled and curl:
+                    self.assertEqual(setup.runtimes(), ("changed", "installed herdr"))
+                    self.assertTrue(any('curl -fsSL https://herdr.dev/install.sh -o "$tmp"' in command and timeout == 1200 for command, timeout in calls))
+                    self.assertEqual(setup.output.getvalue(), "")
+                else:
+                    with self.assertRaises(Waiting): setup.runtimes()
+                    self.assertEqual(installed, [])
+                self.assertFalse(setup.state_path.exists())
 
-    def test_linux_missing_runtime_waits_without_package_bootstrap(self):
-        setup = self.make(no_wait=True, install_missing=True)
-        calls = []
-        def remote(command, timeout=60, input=None):
-            calls.append(command)
-            if command == "uname -s": return Result(out="Linux\n")
-            if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
-            return Result(1 if command.endswith("command -v herdr") else 0)
-        setup.remote = remote
-        with self.assertRaisesRegex(Waiting, "install missing runtimes"):
-            setup.runtimes()
-        self.assertEqual(setup.output.getvalue(), "On new-mac: install missing runtimes and log Pi in once from the GUI\n")
-        self.assertFalse(setup.state_path.exists())
-        self.assertFalse(any(" install " in command for command in calls))
+    def test_dry_run_never_installs_runtimes_on_either_platform(self):
+        for system in ("Darwin", "Linux"):
+            with self.subTest(system=system):
+                setup = self.make(dry_run=True, install_missing=True, no_wait=True)
+                setup.discover_remote_path = lambda: None
+                setup.remote_system_name = lambda: system
+                calls = []
+                def remote(command, *args):
+                    calls.append(command)
+                    return Result(1 if command in ("command -v herdr", "herdr tab list", "pi list 2>/dev/null | grep -F gentle-pi") else 0)
+                setup.remote_tool = remote
+                self.assertEqual(setup.runtimes(), ("changed", "would install herdr, would install gentle-pi"))
+                self.assertFalse(any(" install " in command or "install.sh" in command for command in calls))
+                self.assertEqual(setup.output.getvalue(), "")
+                self.assertEqual(list(setup.home.iterdir()), [])
+                self.assertEqual(setup.changed, [])
+
+    def test_linux_installer_propagates_download_and_script_failures_and_cleans_up(self):
+        for curl_code, script_code in ((22, 0), (0, 7), (0, 0)):
+            with self.subTest(curl_code=curl_code, script_code=script_code):
+                setup = self.make(install_missing=True, no_wait=True)
+                setup.discover_remote_path = lambda: None
+                setup.remote_system_name = lambda: "Linux"
+                commands = []
+                def remote(command, *args):
+                    commands.append(command)
+                    if "install.sh" in command: return Result(1)
+                    return Result(1 if command in ("command -v herdr", "herdr tab list") else 0)
+                setup.remote_tool = remote
+                with self.assertRaises(Waiting): setup.runtimes()
+                command = next(c for c in commands if "install.sh" in c)
+                with tempfile.TemporaryDirectory() as scratch:
+                    root = Path(scratch); tools = root / "bin"; tools.mkdir()
+                    marker = root / "ran"
+                    curl = tools / "curl"
+                    curl.write_text('#!/bin/sh\n[ "$1" = "-fsSL" ] || exit 99\n[ "$3" = "-o" ] || exit 99\nprintf \'echo ran > "%s"; exit %s\\n\' > "$4"\nexit %s\n' % (marker, script_code, curl_code))
+                    curl.chmod(0o755)
+                    result = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True,
+                                            env=dict(os.environ, PATH=str(tools) + ":/usr/bin:/bin", TMPDIR=scratch))
+                    self.assertEqual((result.returncode, result.stdout, result.stderr), (curl_code or script_code, "", ""))
+                    self.assertEqual(marker.exists(), curl_code == 0)
+                    self.assertEqual({p.name for p in root.iterdir()}, {"bin", "ran"} if marker.exists() else {"bin"})
 
     def test_macos_runtimes_still_require_homebrew(self):
         setup = self.make(no_wait=True)
@@ -120,32 +157,6 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(SetupError, "Could not determine remote platform"):
             setup.remote_system_name()
 
-    def test_remote_facts_use_platform_hostname_and_remote_home(self):
-        for system, hostname_command, home in (("Linux", "hostname -s", "/home/leo"),
-                                                ("Darwin", "scutil --get LocalHostName", "/Users/leo")):
-            with self.subTest(system=system):
-                setup = self.make(role="hub")
-                setup.origin = setup.registry.get("origin")
-                setup.remote_path = "/usr/bin:/bin"
-                calls = []
-                def remote(command, timeout=60, input=None):
-                    calls.append(command)
-                    if command == "uname -s": return Result(out=system + "\n")
-                    if command.endswith(hostname_command): return Result(out="New\n")
-                    if command == 'printf %s "$HOME"': return Result(out=home)
-                    if "command -v claude" in command: return Result(1)
-                    if "command -v " in command: return Result(out="/usr/bin/tool\n")
-                    self.fail("unexpected command: " + command)
-                setup.remote = remote
-                entry = setup.build_registry_entry()
-                self.assertEqual(entry["hostname_prefix"], "New")
-                self.assertEqual(entry["gui_cwd"], home + "/tmp")
-                self.assertEqual(entry["runtimes"], ["pi"])
-                self.assertEqual(entry["catalog_root"], "/catalog")
-                self.assertEqual(calls.count("uname -s"), 1)
-                self.assertEqual(setup.output.getvalue(), "")
-                self.assertFalse(setup.state_path.exists())
-
     def test_local_os_does_not_select_remote_runtime_or_hostname_behavior(self):
         for local in ("Darwin", "Linux"):
             for target in ("Darwin", "Linux"):
@@ -154,7 +165,7 @@ class SetupTests(unittest.TestCase):
                     setup.origin = setup.registry.get("origin")
                     calls = []
                     hostname_command = "scutil --get LocalHostName" if target == "Darwin" else "hostname -s"
-                    remote_home = "/Users/remote" if target == "Darwin" else "/home/remote"
+                    remote_home = ("/Users/remote" if local == "Darwin" else "/custom/home/remote") if target == "Darwin" else "/home/remote"
                     def remote(command, timeout=60, input=None):
                         calls.append(command)
                         if command.startswith("# agent-swarm-path"): return Result(out="/usr/bin:/bin\n")
@@ -174,6 +185,8 @@ class SetupTests(unittest.TestCase):
                     entry = setup.build_registry_entry()
                     self.assertEqual(entry["hostname_prefix"], "Target")
                     self.assertEqual(entry["gui_cwd"], remote_home + "/tmp")
+                    self.assertEqual(entry["catalog_root"], "/catalog")
+                    self.assertEqual(entry["runtimes"], ["pi"])
                     log_directory = "Library/Logs/mac-agent-swarm" if local == "Darwin" else ".local/state/agent-swarm/logs"
                     self.assertEqual(setup.log_path.parent, setup.home / log_directory)
                     self.assertEqual(sum(command.endswith("command -v brew") for command in calls), 2 if target == "Darwin" else 0)
@@ -230,6 +243,24 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(SetupError, "Could not determine remote hostname"):
             setup.remote_facts()
 
+    def test_dry_run_missing_base_runtimes_only_reports_requirements(self):
+        for system in ("Linux", "Darwin"):
+            with self.subTest(system=system):
+                setup = self.make(dry_run=True, install_missing=True, no_wait=True)
+                setup.discover_remote_path = lambda: None
+                setup.remote_system_name = lambda: system
+                calls = []
+
+                def remote(command, *args):
+                    calls.append(command)
+                    return Result(1 if command in ("command -v node", "command -v pi", "command -v python3") else 0)
+
+                setup.remote_tool = remote
+                self.assertEqual(setup.runtimes(), ("changed", "would require missing runtimes: node, pi, python3"))
+                self.assertFalse(any(" install " in command or "install.sh" in command for command in calls))
+                self.assertEqual(list(setup.home.iterdir()), [])
+                self.assertEqual(setup.output.getvalue(), "")
+
     def test_default_runner_runs_commands_once(self):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         home = Path(directory.name) / "home"; home.mkdir()
@@ -246,18 +277,13 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("usage:", result.stdout)
 
-    def test_linux_catalog_cli_help_and_forwarding(self):
+    def test_install_missing_help_documents_linux_installer(self):
         script = Path(__file__).parents[1] / "bin" / "swarm-setup"
-        result = subprocess.run([sys.executable, "-W", "ignore::SyntaxWarning", str(script), "add-host", "--help"], text=True, capture_output=True)
+        result = subprocess.run([sys.executable, str(script), "add-host", "--help"], text=True, capture_output=True)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
         help_text = " ".join(result.stdout.split())
-        self.assertIn("--linux-catalog-root", help_text)
-        self.assertIn("existing pre-mounted Linux/WSL catalog path on the target spoke", help_text)
-        cli = runpy.run_path(str(script))
-        with patch.dict(cli["main"].__globals__, Setup=unittest.mock.Mock()) as namespace:
-            namespace["Setup"].return_value.run.return_value = 0
-            self.assertEqual(cli["main"](["add-host", "--name", "new-linux", "--address", "New.local", "--user", "leo", "--linux-catalog-root", "/mnt/shared projects"]), 0)
-            self.assertEqual(namespace["Setup"].call_args.kwargs["linux_catalog_root"], "/mnt/shared projects")
+        self.assertIn("download https://herdr.dev/install.sh with curl and run with sh on Linux", help_text)
+        self.assertIn("dry-run only reports planned installs", help_text)
 
     def test_person_wait_polls_without_tty_until_condition(self):
         setup = self.make(wait_timeout=1)

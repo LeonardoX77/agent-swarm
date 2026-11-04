@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Set up a registered Agent Swarm host (macOS or Linux/WSL) in one resumable process.
 
-Linux/WSL requires preinstalled runtimes and, for spokes, an existing pre-mounted
-catalog via --linux-catalog-root. No SMB mount or auto-update service is installed.
+Linux/WSL uses a human-configured, user-mountable CIFS fstab entry and user systemd
+services for persistent mounts and daily updates. Credentials are created by the human.
 """
 import argparse
 import sys
@@ -18,12 +18,11 @@ from swarm_setup import Setup
 def parser():
     value = argparse.ArgumentParser(prog='swarm-setup', description=__doc__)
     commands = value.add_subparsers(dest='command', required=True)
-    add = commands.add_parser('add-host', help='configure a host through SSH (Linux/WSL: preinstalled runtimes)')
+    add = commands.add_parser('add-host', help='configure a macOS or Linux/WSL host through SSH')
     add.add_argument('--name', required=True); add.add_argument('--address', required=True); add.add_argument('--user', required=True)
     add.add_argument('--role', choices=('hub', 'spoke'), default='spoke'); add.add_argument('--host-fingerprint'); add.add_argument('--origin-user')
-    add.add_argument('--linux-catalog-root', metavar='PATH', help='existing pre-mounted Linux/WSL catalog path on the target spoke (Linux/WSL spokes only; rejected for other targets or roles; absolute; must contain the origin project); no automatic SMB mounting')
     update = add.add_mutually_exclusive_group(); update.add_argument('--auto-update', dest='auto_update', action='store_true', default=True); update.add_argument('--no-auto-update', dest='auto_update', action='store_false')
-    add.add_argument('--update-time', default='04:30'); add.add_argument('--install-missing', action='store_true'); add.add_argument('--skip-live', action='store_true'); add.add_argument('--dry-run', action='store_true'); add.add_argument('--no-wait', action='store_true'); add.add_argument('--wait-timeout', type=int, default=30); add.add_argument('--verbose', action='store_true'); add.add_argument('--registry')
+    add.add_argument('--update-time', default='04:30'); add.add_argument('--install-missing', action='store_true', help='install herdr with Homebrew on macOS or download https://herdr.dev/install.sh with curl and run with sh on Linux; install missing gentle-pi with pi (dry-run only reports planned installs)'); add.add_argument('--skip-live', action='store_true'); add.add_argument('--dry-run', action='store_true'); add.add_argument('--no-wait', action='store_true'); add.add_argument('--wait-timeout', type=int, default=30); add.add_argument('--verbose', action='store_true'); add.add_argument('--registry')
     status = commands.add_parser('status', help='show saved setup state'); status.add_argument('--name', required=True)
     return value
 
@@ -40,8 +39,7 @@ def main(argv=None):
     setup = Setup(args.name, args.address, args.user, role=args.role, host_fingerprint=args.host_fingerprint,
                   origin_user=args.origin_user, auto_update=args.auto_update, update_time=args.update_time, install_missing=args.install_missing,
                   skip_live=args.skip_live, dry_run=args.dry_run, no_wait=args.no_wait,
-                  wait_timeout=args.wait_timeout, verbose=args.verbose, registry_path=args.registry,
-                  linux_catalog_root=args.linux_catalog_root)
+                  wait_timeout=args.wait_timeout, verbose=args.verbose, registry_path=args.registry)
     return setup.run()
 
 

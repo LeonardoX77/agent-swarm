@@ -3,6 +3,8 @@ import importlib.util
 import json
 import os
 import plistlib
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -185,16 +187,144 @@ class SMBMountTests(unittest.TestCase):
         self.assertEqual("unexpected_error", output["error"])
         self.assertNotIn("Traceback", json.dumps(output))
 
-    @patch.object(mount_tool.sys, "platform", "linux")
-    def test_linux_returns_unsupported_platform_without_side_effects(self):
+    @patch.object(mount_tool.sys, "platform", "freebsd")
+    def test_other_platform_returns_unsupported_platform_without_side_effects(self):
         for command in ("status", "mount", "unmount"):
             with self.subTest(command=command):
                 runner = Runner()
                 code, output = mount_tool.run([command, "--host", "host", "--share", "x"], runner=runner, home=self.home, uid=501)
                 self.assertEqual(2, code)
-                self.assertEqual({"ok": False, "error": "unsupported_platform", "message": "swarm-smb-mount only supports macOS"}, output)
+                self.assertEqual({"ok": False, "error": "unsupported_platform", "message": "swarm-smb-mount only supports macOS or Linux"}, output)
                 self.assertEqual([], runner.calls)
                 self.assertEqual([], list(self.home.iterdir()))
+
+
+@patch.object(mount_tool.sys, "platform", "linux")
+class LinuxMountTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.home = Path(self.directory.name)
+        self.mounted = "//HOST/projects /mnt/projects\n"
+        self.fstab = "//host/projects /mnt/projects user,noauto,credentials=/home/leo/.config/agent-swarm/smb-credentials\n"
+
+    def run_tool(self, command, results=(), *options):
+        self.runner = Runner(results)
+        return mount_tool.run([command, "--host", "host", "--share", "projects", "--user", "leo", *options], runner=self.runner, home=self.home, uid=501)
+
+    def test_status_matches_host_case_insensitively_but_exact_share(self):
+        for source, mounted in ((self.mounted, True), ("//host/projects-other /mnt/other\n", False), ("//other/projects /mnt/projects\n", False)):
+            with self.subTest(source=source):
+                code, response = self.run_tool("status", [Result(stdout=source)])
+                self.assertEqual(code, 0)
+                self.assertEqual(response, {"ok": True, "mounted": mounted, **({"mount_point": "/mnt/projects"} if mounted else {})})
+                self.assertEqual(self.runner.calls, [(["findmnt", "-rn", "-t", "cifs", "-o", "SOURCE,TARGET"], 30)])
+
+    def test_mount_requires_user_fstab_entry_without_writes(self):
+        for entry in ("", self.fstab.replace("user,noauto", "defaults"), self.fstab.replace("/mnt/projects", "/elsewhere"), self.fstab.replace("//host/", "//other/")):
+            with self.subTest(entry=entry):
+                code, response = self.run_tool("mount", [Result(), Result(stdout=entry)], "--persistent")
+                self.assertEqual(code, 2)
+                self.assertEqual(response["error"], "fstab_entry_required")
+                self.assertIn("fstab-line", response["message"])
+                self.assertEqual(list(self.home.iterdir()), [])
+                self.assertEqual(len(self.runner.calls), 2)
+
+    def test_mount_and_unmount_use_plain_commands(self):
+        code, response = self.run_tool("mount", [Result(), Result(stdout=self.fstab), Result(), Result(stdout=self.mounted)])
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "mount_point": "/mnt/projects", "via": "mount"}))
+        self.assertEqual(self.runner.calls[2][0], ["mount", "/mnt/projects"])
+        code, response = self.run_tool("unmount", [Result(stdout=self.mounted), Result()])
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "unmounted": True}))
+        self.assertEqual(self.runner.calls[1][0], ["umount", "/mnt/projects"])
+
+    def test_already_mounted_is_idempotent(self):
+        code, response = self.run_tool("mount", [Result(stdout=self.mounted)])
+        self.assertEqual((code, response["via"]), (0, "already_mounted"))
+        self.assertEqual(len(self.runner.calls), 1)
+
+    def test_fstab_line_has_caller_ids_and_human_credentials_template(self):
+        with patch.object(mount_tool.os, "getgid", return_value=502):
+            code, response = self.run_tool("fstab-line")
+        self.assertEqual(code, 0)
+        self.assertEqual(response["fstab_line"], "//host/projects /mnt/projects cifs credentials=%s/.config/agent-swarm/smb-credentials,uid=501,gid=502,vers=3.0,noauto,user,_netdev 0 0" % self.home)
+        self.assertEqual(response["credentials_template"], "username=leo\npassword=<your SMB password>\n")
+        self.assertEqual(response["credentials_mode"], "0600")
+        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_persistence_installs_timer_and_removal_disables_it(self):
+        code, response = self.run_tool("mount", [Result(stdout=self.mounted), Result(), Result(), Result()], "--persistent")
+        self.assertEqual(code, 0)
+        self.assertTrue(response["persistent"])
+        timer = Path(response["timer"])
+        service = timer.with_suffix(".service")
+        self.assertIn("OnBootSec=1s", timer.read_text())
+        self.assertIn("OnUnitActiveSec=300s", timer.read_text())
+        self.assertIn("mount --host host --share projects --user leo", service.read_text())
+        self.assertTrue((self.home / ".local/state/agent-swarm/logs").is_dir())
+        self.assertEqual(self.runner.calls[-1][0], ["systemctl", "--user", "enable", "--now", timer.name])
+        code, response = self.run_tool("unmount", [Result(), Result(), Result()], "--remove-persistent")
+        self.assertEqual((code, response["persistent_removed"]), (0, True))
+        self.assertFalse(timer.exists())
+        self.assertFalse(service.exists())
+        self.assertIn((["systemctl", "--user", "disable", "--now", timer.name], 30), self.runner.calls)
+
+    def test_generated_units_have_separate_executable_argument_and_log_escaping(self):
+        for suffix in ("normal", "space % $ home"):
+            with self.subTest(home=suffix):
+                self.home = Path(self.directory.name) / suffix
+                code, response = self.run_tool("mount", [Result(stdout=self.mounted)], "--persistent")
+                self.assertEqual(code, 0)
+                service = Path(response["service"])
+                text = service.read_text()
+                executable = str(self.home / ".local/agent-swarm/bin/swarm-smb-mount").replace("%", "%%")
+                self.assertIn('ExecStart="%s" mount --host host --share projects --user leo\n' % executable, text)
+                for stream, extension in (("Output", "out"), ("Error", "err")):
+                    expected = "journal" if suffix != "normal" else "append:" + str(self.home / ".local/state/agent-swarm/logs" / (service.stem + "." + extension + ".log"))
+                    self.assertIn("Standard%s=%s\n" % (stream, expected), text)
+
+    @unittest.skipUnless(shutil.which("systemd-analyze"), "requires systemd-analyze")
+    def test_generated_units_verify_offline_for_normal_and_special_home(self):
+        for suffix in ("normal", "space % $ home"):
+            with self.subTest(home=suffix):
+                self.home = Path(self.directory.name) / suffix
+                code, response = self.run_tool("mount", [Result(stdout=self.mounted)], "--persistent")
+                self.assertEqual(code, 0)
+                result = subprocess.run(["systemd-analyze", "--user", "verify", response["service"], response["timer"]],
+                                        text=True, capture_output=True,
+                                        env=dict(os.environ, HOME=str(self.home), TMPDIR=self.directory.name,
+                                                 XDG_CONFIG_HOME=str(self.home / ".config"),
+                                                 XDG_RUNTIME_DIR=self.directory.name))
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+
+    def test_disable_failure_retains_existing_units_but_absence_is_removed(self):
+        for existing in (True, False):
+            for raises in (True, False):
+                with self.subTest(existing=existing, raises=raises):
+                    self.home = Path(self.directory.name) / (str(existing) + str(raises))
+                    paths = [self.home / ".config/systemd/user" / (mount_tool.agent_label("host", "projects") + ext) for ext in (".service", ".timer")]
+                    if existing:
+                        paths[0].parent.mkdir(parents=True)
+                        for path in paths: path.write_text("unchanged")
+                    def fail(argv, timeout):
+                        raise FileNotFoundError("systemctl unavailable")
+                    code, response = self.run_tool("unmount", [Result(), fail if raises else Result(1)], "--remove-persistent")
+                    self.assertEqual(code, 0)
+                    self.assertEqual(response["persistent_removed"], not existing)
+                    self.assertIn("warning", response)
+                    for path in paths:
+                        self.assertEqual(path.exists(), existing)
+                        if existing: self.assertEqual(path.read_text(), "unchanged")
+                    self.assertEqual(len(self.runner.calls), 2)
+
+    def test_unavailable_user_systemd_degrades_without_credentials_or_sudo(self):
+        code, response = self.run_tool("mount", [Result(stdout=self.mounted), Result(1, stderr="no bus")], "--persistent")
+        self.assertEqual(code, 0)
+        self.assertFalse(response["persistent"])
+        self.assertIn("systemctl --user", response["warning"])
+        self.assertFalse((self.home / ".config/agent-swarm/smb-credentials").exists())
+        self.assertFalse(any("sudo" in argv for argv, _ in self.runner.calls))
 
 
 if __name__ == "__main__":
