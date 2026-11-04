@@ -67,9 +67,9 @@ class Herdr:
 
 
 class HerdrTaskTests(unittest.TestCase):
-    def make_registry(self, root, catalog, gui):
+    def make_registry(self, root, catalog, gui, prefix='MacMiniLeo'):
         registry = root / 'hosts.json'
-        registry.write_text(json.dumps({'version': 1, 'hub': 'mini', 'share': {'host': 'hub.local', 'name': 'projects', 'user': 'leo'}, 'hosts': {'mini': {'hostname_prefix': 'MacMiniLeo', 'role': 'hub', 'ssh_alias': 'swarm-mini', 'address': 'hub.local', 'catalog_root': str(catalog), 'repo': str(root), 'path': '/usr/bin:/bin', 'gui_cwd': str(gui), 'runtimes': ['pi']}}}))
+        registry.write_text(json.dumps({'version': 1, 'hub': 'mini', 'share': {'host': 'hub.local', 'name': 'projects', 'user': 'leo'}, 'hosts': {'mini': {'hostname_prefix': prefix, 'role': 'hub', 'ssh_alias': 'swarm-mini', 'address': 'hub.local', 'catalog_root': str(catalog), 'repo': str(root), 'path': '/usr/bin:/bin', 'gui_cwd': str(gui), 'runtimes': ['pi']}}}))
         return registry
 
     def make(self):
@@ -80,6 +80,31 @@ class HerdrTaskTests(unittest.TestCase):
         session = state / 'sessions' / TASK / 'session.jsonl'; herdr = Herdr(session)
         controller = Controller(state, herdr=binary, project_root=catalog, hostname='MacBookLeo-test', gui_cwd=gui, registry=registry, run=herdr)
         return directory, controller, herdr, session
+
+    def test_real_hostname_prefixes_select_controller_host_in_any_case(self):
+        nodes = (os.uname().nodename, subprocess.run(
+            ['hostname', '-s'], check=True, text=True, capture_output=True).stdout.strip())
+        for node in (*nodes, 'MacMiniLeo'):
+            short = node.split('.')[0]
+            for prefix in (short, short.lower(), short.upper()):
+                for hostname in (node, short + '.example.test'):
+                    with self.subTest(prefix=prefix, hostname=hostname), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        catalog = root / 'catalog'; catalog.mkdir()
+                        gui = root / 'gui'; gui.mkdir()
+                        binary = root / 'herdr'; binary.write_text('#!/bin/sh\n'); binary.chmod(0o700)
+                        registry = self.make_registry(root, catalog, gui, prefix)
+                        calls = []
+                        controller = Controller(root / 'state', herdr=binary, hostname=hostname,
+                                                registry=registry, run=lambda *a, **k: calls.append(a))
+                        self.assertEqual(controller.host['name'], 'mini')
+                        self.assertEqual(controller.project, catalog.resolve())
+                        self.assertEqual(controller.gui_cwd, gui.resolve())
+                        self.assertEqual(calls, [])
+                        with self.assertRaisesRegex(TaskError, '^UNSUPPORTED_HOST$'):
+                            Controller(root / 'unrelated-state', herdr=binary,
+                                       hostname='unrelated-' + hostname, registry=registry)
+                        self.assertFalse((root / 'unrelated-state').exists())
 
     def test_envelope_has_six_fields_and_accepts_executor_mode_only(self):
         self.assertEqual(herdr_task._envelope(ENVELOPE), ENVELOPE)
