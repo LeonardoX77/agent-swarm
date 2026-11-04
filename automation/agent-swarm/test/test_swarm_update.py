@@ -40,6 +40,9 @@ class Runner:
 class SwarmUpdateTests(unittest.TestCase):
     def setUp(self):
         self.mod = load_module()
+        platform = patch.object(self.mod.sys, "platform", "darwin")
+        platform.start()
+        self.addCleanup(platform.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
 
@@ -140,6 +143,106 @@ class SwarmUpdateTests(unittest.TestCase):
         code, response = self.mod.run(["check", "--json"], runner=Runner(), home=self.home, uid=501)
         self.assertEqual(code, 0)
         self.assertIn("components", response)
+
+
+class LinuxSwarmUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_module()
+        platform = patch.object(self.mod.sys, "platform", "linux")
+        platform.start()
+        self.addCleanup(platform.stop)
+        temp = tempfile.TemporaryDirectory(prefix="swarm-update-test-")
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name) / "home with spaces"
+        self.home.mkdir()
+        self.runner = Runner()
+
+    def run_cli(self, *args):
+        return self.mod.run(list(args), runner=self.runner, home=self.home, uid=1000,
+                            environ={"PATH": "/test/bin"}, clock=lambda: 1000000)
+
+    def test_install_units_status_and_uninstall(self):
+        node = self.home / ".nvm/versions/node/v22.0.0/bin"
+        node.mkdir(parents=True)
+        code, installed = self.run_cli("install", "--hour", "6", "--minute", "7",
+                                        "--components", "pi,pi-extensions")
+        self.assertEqual(code, 0, installed)
+        self.assertTrue(installed["installed"])
+        units = self.home / ".config/systemd/user"
+        service = units / "agent-swarm-update.service"
+        timer = units / "agent-swarm-update.timer"
+        tool = self.mod.SwarmUpdate(self.runner, self.home, 1000)
+        path = tool.read_config()["path"]
+        self.assertIn(str(node), path)
+        self.assertEqual(service.read_text(),
+            '[Unit]\nDescription=Agent Swarm updates\n\n[Service]\nType=oneshot\n'
+            'ExecStart=/usr/bin/env python3 "' + str(tool.local_script_path()) + '" run\n'
+            'Environment="PATH=' + path + '"\n')
+        self.assertEqual(timer.read_text(),
+            '[Unit]\nDescription=Schedule Agent Swarm updates\n\n[Timer]\n'
+            'OnCalendar=*-*-* 06:07:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n')
+        self.assertEqual(tool.local_script_path().read_bytes(), SCRIPT.read_bytes())
+        self.assertIn(["systemctl", "--user", "daemon-reload"], self.runner.calls)
+        self.assertIn(["systemctl", "--user", "enable", "--now", timer.name], self.runner.calls)
+        self.runner.replies[("systemctl", "--user", "is-enabled", timer.name)] = (1, "disabled\n", "")
+        code, status = self.run_cli("status")
+        self.assertEqual(code, 0)
+        self.assertTrue(status["loaded"], "An active timer is loaded even if not enabled")
+        self.assertEqual(status["config"], tool.read_config())
+        self.assertIsNone(status["last_run"])
+        self.runner.replies[("systemctl", "--user", "is-active", timer.name)] = (3, "inactive\n", "")
+        self.assertFalse(self.run_cli("status")[1]["loaded"])
+        code, result = self.run_cli("uninstall")
+        self.assertEqual(code, 0)
+        self.assertTrue(result["uninstalled"])
+        self.assertFalse(service.exists())
+        self.assertFalse(timer.exists())
+        self.assertIn(["systemctl", "--user", "disable", "--now", timer.name], self.runner.calls)
+        self.assertEqual(self.runner.calls[-1], ["systemctl", "--user", "daemon-reload"])
+
+    def test_systemd_unavailable_does_not_install(self):
+        self.runner.replies["systemctl"] = (1, "", "Failed to connect to bus")
+        code, response = self.run_cli("install")
+        self.assertEqual((code, response), (2, {"error": "systemctl --user is unavailable: Failed to connect to bus"}))
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_enable_failure_is_not_success(self):
+        self.runner.replies[("systemctl", "--user", "enable", "--now", "agent-swarm-update.timer")] = (1, "", "denied")
+        code, response = self.run_cli("install", "--path", "/custom/bin")
+        self.assertEqual((code, response), (2, {"error": "Could not enable systemd update timer: denied"}))
+
+    def test_linux_component_matrix_and_run_log(self):
+        self.runner.replies[("herdr", "--version")] = (0, "0.9.4\n", "")
+        code, checked = self.run_cli("check", "--refresh")
+        self.assertEqual(code, 0)
+        items = {item["name"]: item for item in checked["components"]}
+        self.assertEqual(items["herdr"], {"name": "herdr", "status": "installed", "current": "0.9.4", "outdated": True, "source": "standalone"})
+        self.assertEqual(items["mosh"], {"name": "mosh", "status": "skipped", "reason": "managed by the system package manager"})
+        self.assertEqual(items["moshi-hook"]["source"], "standalone")
+        self.assertEqual(self.run_cli("install", "--path", "/custom/bin")[0], 0)
+        code, result = self.run_cli("run")
+        self.assertEqual(code, 0, result)
+        for command in (["herdr", "update"], ["moshi-hook", "update"],
+                        ["pi", "update", "--self"], ["pi", "update", "--extensions"]):
+            self.assertIn(command, self.runner.calls)
+        self.assertFalse(any(call[0] in ("brew", "sudo", "/bin/launchctl") for call in self.runner.calls))
+        self.assertNotIn(["herdr", "server", "restart"], self.runner.calls)
+        log = self.home / ".local/state/agent-swarm/logs/swarm-update.log"
+        self.assertIn('"commands"', log.read_text())
+        code, status = self.run_cli("status")
+        self.assertEqual(code, 0)
+        self.assertEqual(status["last_run"], {"finished_at": 1000000, "result": "ok"})
+
+    def test_missing_herdr_is_skipped_and_pi_failure_preserves_stamp(self):
+        self.runner.replies["herdr"] = (127, "", "not found")
+        self.runner.replies[("pi", "update", "--self")] = (1, "", "failed")
+        self.assertEqual(self.run_cli("install")[0], 0)
+        code, result = self.run_cli("run")
+        self.assertEqual(code, 1)
+        self.assertEqual(result["components"][0], {"name": "herdr", "status": "skipped", "reason": "not installed"})
+        self.assertNotIn(["herdr", "update"], self.runner.calls)
+        self.assertIn(["pi", "update", "--extensions"], self.runner.calls)
+        self.assertIsNone(self.run_cli("status")[1]["last_run"])
 
 
 if __name__ == "__main__":
