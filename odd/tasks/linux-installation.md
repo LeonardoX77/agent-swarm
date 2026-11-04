@@ -18,11 +18,11 @@ S7. "6 quita las redundancias" (redundant tests), "7 arregla lo que creas" (norm
 - T1 | S1 | delegated | done | Portable Linux/WSL setup core and OS-matrix regression coverage verified (50 focused tests, 1 skipped); commit: `a13062a`.
 - T2 | S1 | delegated | done | Manual Linux/WSL catalog boundary and platform-specific service avoidance verified (59 focused tests, 1 skipped); commit: `82a4818`.
 - T3 | S1 | delegated | done | Linux/WSL documentation and full-suite test isolation/platform expectations verified (131 tests passed, 1 skipped); commit: `38dd25a`.
-- T4 | S2,S6,S7 | delegated | done | Linux SMB mount (swarm-smb-mount Linux backend + setup integration replacing `--linux-catalog-root`), Linux update phase, neutral Remote Login text, SyntaxWarning, redundant-test cleanup, gui_cwd tests; commit pending.
-- T5 | S3 | delegated | done | swarm-update Linux backend (systemd --user timer), identical CLI/JSON contract; commit pending.
-- T6 | S4,S5 | delegated | done | swarm-delegate python resolution and case-insensitive hostname_prefix matching with real hostname tests; commit pending.
-- T7 | S2,S3 | delegated | done | Linux/WSL documentation updated to the new design (7 files); commit pending.
-- T8 | S6 | inline | done | Real verification on this WSL: swarm-update via real systemd --user (installed, run, status, uninstalled), swarm-smb-mount against a temporary loopback Samba share (port 1445 because Windows owns 445) with persistence and full revert, real hostname resolution for 5CG6031YZW. Not run: real swarm-setup add-host over SSH (consent unanswered), delegation to Linux. Packages cifs-utils and samba remain installed; commit pending.
+- T4 | S2,S6,S7 | delegated | done | Linux SMB mount (swarm-smb-mount Linux backend + setup integration replacing `--linux-catalog-root`), Linux update phase, neutral Remote Login text, SyntaxWarning, redundant-test cleanup, gui_cwd tests; commit: `2456b75`.
+- T5 | S3 | delegated | done | swarm-update Linux backend (systemd --user timer), identical CLI/JSON contract; commit: `bbf1e12`.
+- T6 | S4,S5 | delegated | done | swarm-delegate python resolution and case-insensitive hostname_prefix matching with real hostname tests; commit: `c39e95d`.
+- T7 | S2,S3 | delegated | done | Linux/WSL documentation updated to the new design (7 files); commit: `324927a`.
+- T8 | S6 | inline | done | Real verification on this WSL: swarm-update via real systemd --user (installed, run, status, uninstalled), swarm-smb-mount against a temporary loopback Samba share (port 1445 because Windows owns 445) with persistence and full revert, real hostname resolution for 5CG6031YZW. Not run: real swarm-setup add-host over SSH (consent unanswered), delegation to Linux. Packages cifs-utils and samba remain installed; commit: `no code change`.
 
 ## Log
 
