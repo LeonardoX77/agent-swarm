@@ -83,6 +83,7 @@ class SwarmUpdate:
         if nvm_bin is not None: add(nvm_bin)
         add(self.home / ".hermes/node/bin")
         add(self.home / ".local/bin")
+        add(self.home / ".pi/agent/bin")
         return ":".join(paths + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
 
     def use_tool_path(self, config=None):

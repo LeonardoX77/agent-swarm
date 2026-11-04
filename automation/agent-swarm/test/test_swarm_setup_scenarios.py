@@ -85,11 +85,15 @@ class FakeMacs:
             available = "gentle-pi" in self.tools and (not self.nvm_only_pi or str(self.remote_home / ".nvm/versions/node/v24.19.0/bin") in path_prefix.split(":"))
             return Result(0 if available else 1, "gentle-pi\n")
         if command == "herdr tab list": return Result()
+        if command == "herdr integration status 2>/dev/null | grep -E '^pi: ' | grep -v 'not installed'":
+            return Result(out="pi: installed\n")
         if command == "scutil --get LocalHostName": return Result(out="Bea\n")
         if command.startswith("ssh -o BatchMode=yes swarm-origin true"):
             return Result(0 if self.reverse_alias else 1)
-        if command.startswith("ssh-keyscan -t ed25519 "):
-            return Result(out="Origin.local ssh-ed25519 ORIGINKEY\n")
+        if command.startswith("ssh-keyscan "):
+            words = shlex.split(command)
+            host = "[Origin.local]:" + words[words.index("-p") + 1] if "-p" in words else "Origin.local"
+            return Result(out=host + " ssh-ed25519 ORIGINKEY\n")
         if command.endswith(" | ssh-keygen -lf -"):
             return Result(out="256 SHA256:ORIGINFP origin\n")
         if command.startswith("test -f ") and "ssh-keygen -t ed25519" in command:
@@ -100,7 +104,7 @@ class FakeMacs:
             return Result(out=Path(shlex.split(command)[1]).read_text())
         if command.startswith("python3 -") or command.startswith("/usr/bin/python3 -"):
             result = self._remote_python(command, program)
-            if "Host swarm-origin" in command: self.reverse_alias = True
+            if "Host swarm-origin" in command and "p.write_text" in program: self.reverse_alias = True
             return result
         if "swarm-smb-mount status" in command:
             return Result(out=json.dumps({"mounted": self.mounted}))
@@ -196,7 +200,7 @@ class SetupScenarioTests(unittest.TestCase):
                       host_fingerprint="SHA256:NEWFP", output=output,
                       sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
                       clock=lambda: now[0], wait_timeout=1, update_time="04:30", **options)
-        setup.socket_check = lambda address: machines.socket_check()
+        setup.socket_check = lambda address, port=22: machines.socket_check()
         return setup, registry_path
 
     def run_zero_to_done(self, **options):
@@ -210,6 +214,38 @@ class SetupScenarioTests(unittest.TestCase):
     def snapshot(root):
         return {path.relative_to(root): (path.read_bytes(), path.stat().st_mode & 0o777)
                 for path in root.rglob("*") if path.is_file()}
+
+    def test_nondefault_reverse_port_and_safe_port_reruns(self):
+        machines, first, registry_path = self.run_zero_to_done(ssh_port=2222, origin_ssh_port=2200)
+        config = machines.remote_home / ".ssh/config"
+        self.assertIn("  HostName Origin.local\n  Port 2200\n  User ", config.read_text())
+        self.assertEqual((machines.remote_home / ".ssh/known_hosts").read_bytes(), b"[Origin.local]:2200 ssh-ed25519 ORIGINKEY\n")
+        self.assertEqual(machines.remote_commands.count("ssh-keyscan -p 2200 -t ed25519 Origin.local"), 2)
+        self.assertTrue(any("'[Origin.local]:2200 ssh-ed25519 ORIGINKEY" in c and "ssh-keygen -lf -" in c for c in machines.remote_commands))
+        state = json.loads(first.state_path.read_text())
+        self.assertEqual((state["ssh_port"], state["origin_ssh_port"]), (2222, 2200))
+        rerun, _ = self.make_setup(machines, registry_path, ssh_port=2222, origin_ssh_port=2200)
+        before = self.snapshot(machines.remote_home)
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertEqual(rerun.changed, [])
+        self.assertEqual(self.snapshot(machines.remote_home), before)
+        for ports in ({"ssh_port": 22, "origin_ssh_port": 2200}, {"ssh_port": 2222, "origin_ssh_port": 22}):
+            before = self.snapshot(machines.remote_home); registry_before = registry_path.read_bytes()
+            rerun, _ = self.make_setup(machines, registry_path, **ports)
+            self.assertEqual(rerun.run(), 1)
+            self.assertIn("SSH alias conflict for swarm-", rerun.output.getvalue())
+            self.assertEqual(self.snapshot(machines.remote_home), before)
+            self.assertEqual(registry_path.read_bytes(), registry_before)
+            self.assertEqual(json.loads(first.state_path.read_text())["origin_ssh_port"], 2200)
+
+    def test_reverse_alias_port_conflict_without_saved_state(self):
+        machines, first, registry_path = self.run_zero_to_done()
+        before = self.snapshot(machines.remote_home)
+        rerun, _ = self.make_setup(machines, registry_path, origin_ssh_port=2222)
+        rerun.state = {"name": "bea", "phases": {}}
+        self.assertEqual(rerun.run(), 1)
+        self.assertIn("SSH alias conflict for swarm-origin", rerun.output.getvalue())
+        self.assertEqual(self.snapshot(machines.remote_home), before)
 
     def test_linux_zero_to_done_installs_helpers_and_uses_mnt_catalog(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
@@ -388,6 +424,27 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertEqual(remote_before, self.snapshot(machines.remote_home))
         self.assertEqual(registry_before, registry_path.read_bytes())
         self.assertEqual(len(machines.nonces), submits_before)
+
+    def test_reverse_port_22_rejects_nondefault_alias_without_state(self):
+        machines, first, registry_path = self.run_zero_to_done(origin_ssh_port=2200)
+        first.state_path.unlink()
+        config = machines.remote_home / ".ssh/config"
+        config_before = config.read_bytes()
+        registry_before = registry_path.read_bytes()
+        rerun, _ = self.make_setup(machines, registry_path, origin_ssh_port=22)
+        code = rerun.run()
+        self.assertEqual(config.read_bytes(), config_before)
+        self.assertEqual(registry_path.read_bytes(), registry_before)
+        self.assertEqual(code, 1, rerun.output.getvalue())
+        self.assertIn("SSH alias conflict for swarm-origin", rerun.output.getvalue())
+
+    def test_unspecified_origin_port_still_reuses_a_working_alias(self):
+        machines, first, registry_path = self.run_zero_to_done(origin_ssh_port=2200)
+        first.state_path.unlink()
+        config_before = (machines.remote_home / ".ssh/config").read_bytes()
+        rerun, _ = self.make_setup(machines, registry_path)
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertEqual((machines.remote_home / ".ssh/config").read_bytes(), config_before)
 
     def test_dry_run_on_zero_state_reports_changes_and_writes_nothing(self):
         machines = FakeMacs(); self.addCleanup(machines.close)

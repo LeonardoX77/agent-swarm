@@ -68,6 +68,26 @@ class SwarmUpdateTests(unittest.TestCase):
         self.assertIn("PATH=", output.getvalue())
         self.assertIn(str(nvm_bin), output.getvalue())
 
+    def test_pi_installer_path_discovered_by_check_and_install(self):
+        for platform in ("darwin", "linux"):
+            with self.subTest(platform=platform), patch.object(self.mod.sys, "platform", platform):
+                self.home = Path(self.temp.name) / platform
+                self.home.mkdir()
+                for suffix in (".local/bin", ".pi/agent/bin"):
+                    (self.home / suffix).mkdir(parents=True, exist_ok=True)
+                runner = Runner()
+                code, response = self.mod.run(["check"], runner=runner, home=self.home, uid=501)
+                self.assertEqual(code, 0, response)
+                expected = str(self.home / ".local/bin") + ":" + str(self.home / ".pi/agent/bin")
+                self.assertIn(expected, response["path_used"])
+                self.assertTrue(all(expected in env["PATH"] for env in runner.environments))
+                tool = self.mod.SwarmUpdate(runner, self.home, 501)
+                tool.install(components=["pi"])
+                self.assertEqual(tool.read_config()["path"], response["path_used"])
+                # Explicit configured PATH remains authoritative on both platforms.
+                tool.install(components=["pi"], path="/custom/bin:/usr/bin")
+                self.assertEqual(tool.status()["config"]["path"], "/custom/bin:/usr/bin")
+
     def test_default_runner_runs_real_subprocess_once(self):
         result = self.mod.SwarmUpdate._subprocess_runner(["/usr/bin/true"])
         self.assertEqual(result.returncode, 0)

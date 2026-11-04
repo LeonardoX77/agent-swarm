@@ -21,8 +21,10 @@ def parser():
     add = commands.add_parser('add-host', help='configure a macOS or Linux/WSL host through SSH')
     add.add_argument('--name', required=True); add.add_argument('--address', required=True); add.add_argument('--user', required=True)
     add.add_argument('--role', choices=('hub', 'spoke'), default='spoke'); add.add_argument('--host-fingerprint'); add.add_argument('--origin-user')
+    add.add_argument('--ssh-port', default='22', metavar='PORT', help='target sshd port (1-65535; default: 22)')
+    add.add_argument('--origin-ssh-port', default=None, metavar='PORT', help='origin sshd port reached by the target (1-65535; default: 22)')
     update = add.add_mutually_exclusive_group(); update.add_argument('--auto-update', dest='auto_update', action='store_true', default=True); update.add_argument('--no-auto-update', dest='auto_update', action='store_false')
-    add.add_argument('--update-time', default='04:30'); add.add_argument('--install-missing', action='store_true', help='install herdr with Homebrew on macOS or download https://herdr.dev/install.sh with curl and run with sh on Linux; install missing gentle-pi with pi (dry-run only reports planned installs)'); add.add_argument('--skip-live', action='store_true'); add.add_argument('--dry-run', action='store_true'); add.add_argument('--no-wait', action='store_true'); add.add_argument('--wait-timeout', type=int, default=30); add.add_argument('--verbose', action='store_true'); add.add_argument('--registry')
+    add.add_argument('--update-time', default='04:30'); add.add_argument('--install-missing', action='store_true', help='install herdr with Homebrew on macOS or download https://herdr.dev/install.sh with curl and run with sh on Linux; install missing gentle-pi with pi and herdr Pi integration with herdr (dry-run only reports planned installs)'); add.add_argument('--skip-live', action='store_true'); add.add_argument('--dry-run', action='store_true'); add.add_argument('--no-wait', action='store_true'); add.add_argument('--wait-timeout', type=int, default=30); add.add_argument('--verbose', action='store_true'); add.add_argument('--registry')
     status = commands.add_parser('status', help='show saved setup state'); status.add_argument('--name', required=True)
     return value
 
@@ -36,7 +38,16 @@ def main(argv=None):
         return 0
     if not 0 <= args.wait_timeout <= 1440 or len(args.update_time) != 5 or args.update_time[2] != ':':
         print('INVALID_INPUT', file=sys.stderr); return 2
+    try:
+        ports = [args.ssh_port] + ([] if args.origin_ssh_port is None else [args.origin_ssh_port])
+        if any(not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535 for port in ports):
+            raise ValueError
+        args.ssh_port = int(args.ssh_port)
+        if args.origin_ssh_port is not None: args.origin_ssh_port = int(args.origin_ssh_port)
+    except ValueError:
+        print('INVALID_INPUT', file=sys.stderr); return 2
     setup = Setup(args.name, args.address, args.user, role=args.role, host_fingerprint=args.host_fingerprint,
+                  ssh_port=args.ssh_port, origin_ssh_port=args.origin_ssh_port,
                   origin_user=args.origin_user, auto_update=args.auto_update, update_time=args.update_time, install_missing=args.install_missing,
                   skip_live=args.skip_live, dry_run=args.dry_run, no_wait=args.no_wait,
                   wait_timeout=args.wait_timeout, verbose=args.verbose, registry_path=args.registry)

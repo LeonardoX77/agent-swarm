@@ -4,6 +4,9 @@ import json
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+import contextlib
+import runpy
 from pathlib import Path
 import sys
 
@@ -62,6 +65,173 @@ class SetupTests(unittest.TestCase):
         return Setup("new-mac", "New.local", "leo", registry=Registry(), runner=runner, home=home,
                      nodename="Origin.local", tty=False, uid=uid, output=output,
                      sleep=sleep, clock=lambda: now[0], **kwargs)
+
+    def test_target_ports_preserve_default_commands_and_alias_bytes(self):
+        for system in ("Darwin", "Linux"):
+            for port in (22, 2222, 1, 65535):
+                with self.subTest(system=system, port=port):
+                    setup = self.make(local_system=system, ssh_port=port, host_fingerprint="SHA256:ok")
+                    key = setup.home / ".ssh/agent_swarm_new_mac"
+                    key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("pub")
+                    calls = []; polls = []
+                    scan = ("New.local" if port == 22 else "[New.local]:%s" % port) + " ssh-ed25519 KEY\n"
+                    def runner(argv, **kwargs):
+                        calls.append(argv)
+                        if argv[0] == "ssh-keyscan": return Result(out=scan)
+                        if argv[0] == "ssh-keygen": return Result(out="256 SHA256:ok host")
+                        return Result(1 if "swarm-new-mac" in argv else 0)
+                    setup.runner = runner
+                    setup.socket_check = lambda address, port: polls.append((address, port)) or len(polls) > 1
+                    self.assertEqual(setup.remote_login(), ("ok", "Remote Login reachable"))
+                    self.assertEqual(polls, [("New.local", port)] * 2)
+                    self.assertEqual(setup.ssh_to_new(), ("changed", "configured SSH channel"))
+                    flags = [] if port == 22 else ["-p", str(port)]
+                    self.assertEqual([c for c in calls if c[0] == "ssh-keyscan"], [["ssh-keyscan", *flags, "-t", "ed25519", "New.local"]] * 2)
+                    self.assertIn(["ssh", *flags, "-i", str(key), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "leo@New.local", "true"], calls)
+                    expected = "Host swarm-new-mac\n  HostName New.local\n" + ("  Port %s\n" % port if port != 22 else "") + "  User leo\n  IdentityFile %s\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ForwardAgent no\n" % key
+                    self.assertEqual((key.parent / "config").read_text(), expected)
+                    self.assertEqual((key.parent / "known_hosts").read_text(), scan)
+                    setup.ssh_to_new()
+                    self.assertEqual((key.parent / "known_hosts").read_text(), scan)
+                    self.assertEqual((key.parent / "config").read_text(), expected)
+                    before = (key.parent / "config").read_bytes()
+                    setup.ssh_port = 2223
+                    with self.assertRaisesRegex(SetupError, "SSH alias conflict for swarm-new-mac"):
+                        setup.ssh_to_new()
+                    self.assertEqual((key.parent / "config").read_bytes(), before)
+
+    def test_port_cli_validation_and_help(self):
+        script = Path(__file__).parents[1] / "bin/swarm-setup"
+        with tempfile.TemporaryDirectory() as home:
+            for option in ("--ssh-port", "--origin-ssh-port"):
+                for value in ("0", "65536", "-1", "abc", "22.5", ""):
+                    with self.subTest(option=option, value=value):
+                        result = subprocess.run([sys.executable, str(script), "add-host", "--name", "new", "--address", "New.local", "--user", "leo", option, value], env=dict(os.environ, HOME=home), capture_output=True, text=True)
+                        self.assertEqual((result.returncode, result.stdout, result.stderr), (2, "", "INVALID_INPUT\n"))
+                        self.assertEqual(list(Path(home).iterdir()), [])
+            result = subprocess.run([sys.executable, str(script), "add-host", "--help"], capture_output=True, text=True)
+            self.assertEqual((result.returncode, result.stderr), (0, ""))
+            for option in ("--ssh-port PORT", "--origin-ssh-port PORT"):
+                self.assertIn(option, result.stdout)
+
+    def test_valid_port_options_reach_setup_and_status_stays_unchanged(self):
+        script = Path(__file__).parents[1] / "bin/swarm-setup"
+        main = runpy.run_path(str(script))["main"]
+        for port in (1, 22, 65535):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.dict(main.__globals__, Setup=unittest.mock.Mock()) as namespace:
+                namespace["Setup"].return_value.run.return_value = 0
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = main(["add-host", "--name", "new", "--address", "New.local", "--user", "leo", "--ssh-port", str(port), "--origin-ssh-port", str(port)])
+                self.assertEqual((code, stdout.getvalue(), stderr.getvalue()), (0, "", ""))
+                options = namespace["Setup"].call_args.kwargs
+                self.assertEqual((options["ssh_port"], options["origin_ssh_port"]), (port, port))
+        for option in ("--ssh-port", "--origin-ssh-port"):
+            result = subprocess.run([sys.executable, str(script), "status", "--name", "new", option, "2222"], text=True, capture_output=True)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (2, "", "usage: swarm-setup [-h] {add-host,status} ...\nswarm-setup: error: unrecognized arguments: %s 2222\n" % option))
+
+    def test_runtime_integration_probe_install_and_dry_run(self):
+        probe = "herdr integration status 2>/dev/null | grep -E '^pi: ' | grep -v 'not installed'"
+        for system in ("Darwin", "Linux"):
+            for present, install, dry in ((True, False, False), (False, True, False),
+                                           (False, True, True), (False, False, False)):
+                with self.subTest(system=system, present=present, install=install, dry=dry):
+                    setup = self.make(no_wait=True, install_missing=install, dry_run=dry)
+                    setup.discover_remote_path = lambda: None
+                    setup.remote_system_name = lambda: system
+                    calls = []; integrated = [present]
+                    before = list(setup.home.iterdir())
+                    def remote(command, *args):
+                        calls.append(command)
+                        if command == probe: return Result(0 if integrated[0] else 1)
+                        if command == "herdr integration install pi":
+                            integrated[0] = True; return Result()
+                        return Result()
+                    setup.remote_tool = remote
+                    if not present and not install:
+                        with self.assertRaises(Waiting) as raised: setup.runtimes()
+                        expected = "On new-mac: install missing runtimes and log Pi in once from the GUI; missing probes: herdr-pi-integration"
+                        if system == "Linux":
+                            expected = "On new-mac: install missing runtimes and log Pi in once locally; missing probes: herdr-pi-integration"
+                        self.assertEqual(str(raised.exception), expected)
+                        self.assertEqual(setup.output.getvalue(), expected + "\n")
+                        self.assertEqual(setup.log_path.read_text(), expected + "\n")
+                    else:
+                        expected = ("ok", "required runtimes available") if present else ("changed", ("would install" if dry else "installed") + " herdr pi integration")
+                        self.assertEqual(setup.runtimes(), expected)
+                        self.assertEqual(setup.output.getvalue(), "")
+                        self.assertEqual(list(setup.home.iterdir()), before)
+                    self.assertIn(probe, calls)
+                    self.assertEqual(calls.count("herdr integration install pi"), int(not present and install and not dry))
+                    self.assertEqual(integrated[0], present or (install and not dry))
+                    self.assertFalse(setup.state_path.exists())
+
+    def test_integration_follows_herdr_install_and_never_runs_without_herdr(self):
+        for system in ("Darwin", "Linux"):
+            for success, dry in ((True, False), (False, False), (True, True)):
+                with self.subTest(system=system, success=success, dry=dry):
+                    setup = self.make(no_wait=True, install_missing=True, dry_run=dry)
+                    setup.discover_remote_path = lambda: None
+                    setup.remote_system_name = lambda: system
+                    installed = set(); calls = []
+                    def remote(command, *args):
+                        calls.append(command)
+                        if command == "command -v herdr" or command == "herdr tab list":
+                            return Result(0 if "herdr" in installed else 1)
+                        if command.startswith("herdr integration status "):
+                            return Result(0 if "integration" in installed else 1)
+                        if command == "brew install herdr" or "install.sh" in command:
+                            if success: installed.add("herdr")
+                            return Result(0 if success else 1)
+                        if command == "herdr integration install pi":
+                            self.assertIn("herdr", installed)
+                            installed.add("integration")
+                        return Result()
+                    setup.remote_tool = remote
+                    if not success:
+                        with self.assertRaises(Waiting): setup.runtimes()
+                        self.assertNotIn("herdr integration install pi", calls)
+                    else:
+                        verb = "would install" if dry else "installed"
+                        self.assertEqual(setup.runtimes(), ("changed", verb + " herdr, " + verb + " herdr pi integration"))
+                        self.assertEqual(installed, set() if dry else {"herdr", "integration"})
+                    self.assertFalse(setup.state_path.exists())
+
+    def test_runtime_wait_lists_probes_and_linux_server_instructions(self):
+        for system in ("Darwin", "Linux"):
+            setup = self.make(no_wait=True)
+            setup.discover_remote_path = lambda: None
+            setup.remote_system_name = lambda: system
+            setup.remote_tool = lambda *args: Result(1)
+            with self.assertRaises(Waiting) as raised: setup.runtimes()
+            # Preserve the macOS prefix byte-for-byte, even with every probe failing.
+            prefix = "On new-mac: install missing runtimes and log Pi in once "
+            expected = prefix + ("from the GUI" if system == "Darwin" else "locally")
+            expected += "; missing probes: herdr, node, pi, python3, gentle-pi, herdr-server, herdr-pi-integration"
+            if system == "Darwin": expected += ", brew"
+            else:
+                expected += "; start the herdr server by running herdr in a normal terminal, then detach, or use a pty with a non-zero grid (rows and columns); the server survives the client exiting"
+            self.assertEqual(str(raised.exception), expected)
+            self.assertEqual(setup.output.getvalue(), expected + "\n")
+            self.assertNotIn("herdr server start", expected)
+            self.assertFalse(setup.state_path.exists())
+
+    def test_remote_path_includes_pi_installer_bin_next_to_local_bin(self):
+        setup = self.make()
+        for suffix in (".local/bin", ".pi/agent/bin", ".hermes/node/bin"):
+            (setup.home / suffix).mkdir(parents=True)
+        pi = setup.home / ".pi/agent/bin/pi"
+        pi.write_text("#!/bin/sh\nprintf 'gentle-pi\\n'\n"); pi.chmod(0o755)
+        def remote(command, *args, **kwargs):
+            return subprocess.run(["/bin/sh", "-c", command], text=True, capture_output=True,
+                                  env=dict(os.environ, HOME=str(setup.home)))
+        setup.remote = remote
+        path = setup.discover_remote_path()
+        self.assertIn(str(setup.home / ".local/bin") + ":" + str(pi.parent), path)
+        self.assertIn(str(setup.home / ".hermes/node/bin"), path)
+        self.assertTrue(path.endswith("/usr/bin:/bin:/usr/sbin:/sbin"))
+        self.assertEqual(setup.remote_tool("command -v pi").stdout, str(pi) + "\n")
+        self.assertEqual(setup.remote_tool("pi list").stdout, "gentle-pi\n")
 
     def test_platform_specific_log_locations(self):
         for system, suffix in (("Linux", ".local/state/agent-swarm/logs"),
@@ -178,7 +348,7 @@ class SetupTests(unittest.TestCase):
                             return Result(out="/opt/homebrew/bin/brew\n")
                         if command == "command -v claude": return Result(1)
                         if command.startswith("command -v "): return Result(out="/usr/bin/tool\n")
-                        if command in ("pi list 2>/dev/null | grep -F gentle-pi", "herdr tab list"): return Result()
+                        if command in ("pi list 2>/dev/null | grep -F gentle-pi", "herdr tab list") or command.startswith("herdr integration status "): return Result()
                         self.fail("unexpected remote command: " + command)
                     setup.remote = remote
                     self.assertEqual(setup.runtimes(), ("ok", "required runtimes available"))
@@ -206,7 +376,7 @@ class SetupTests(unittest.TestCase):
                     command = command.removeprefix("PATH=/usr/bin:/bin ")
                     if command in ("command -v herdr", "herdr tab list"): return Result(0 if installed else 1)
                     if command == "brew install herdr": installed.append("herdr"); return Result()
-                    if command.startswith("command -v ") or command == "pi list 2>/dev/null | grep -F gentle-pi": return Result()
+                    if command.startswith("command -v ") or command == "pi list 2>/dev/null | grep -F gentle-pi" or command.startswith("herdr integration status "): return Result()
                     self.fail("unexpected remote command: " + command)
                 setup.remote = remote
                 self.assertEqual(setup.runtimes(), ("changed", "installed herdr"))
@@ -284,6 +454,7 @@ class SetupTests(unittest.TestCase):
         help_text = " ".join(result.stdout.split())
         self.assertIn("download https://herdr.dev/install.sh with curl and run with sh on Linux", help_text)
         self.assertIn("dry-run only reports planned installs", help_text)
+        self.assertIn("herdr Pi integration", help_text)
 
     def test_person_wait_polls_without_tty_until_condition(self):
         setup = self.make(wait_timeout=1)
