@@ -67,12 +67,44 @@ class Herdr:
 
 
 class HerdrTaskTests(unittest.TestCase):
+    def make_registry(self, root, catalog, gui, prefix='MacMiniLeo'):
+        registry = root / 'hosts.json'
+        registry.write_text(json.dumps({'version': 1, 'hub': 'mini', 'share': {'host': 'hub.local', 'name': 'projects', 'user': 'leo'}, 'hosts': {'mini': {'hostname_prefix': prefix, 'role': 'hub', 'ssh_alias': 'swarm-mini', 'address': 'hub.local', 'catalog_root': str(catalog), 'repo': str(root), 'path': '/usr/bin:/bin', 'gui_cwd': str(gui), 'runtimes': ['pi']}}}))
+        return registry
+
     def make(self):
-        directory = tempfile.TemporaryDirectory(); root = Path(directory.name); state = root / 'state'; catalog = root / 'projects'; project = catalog / 'leo' / 'mac-agent-swarm'; project.mkdir(parents=True); gui = root / 'gui'; gui.mkdir()
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        root = Path(directory.name); state = root / 'state'; catalog = root / 'projects'; project = catalog / 'leo' / 'mac-agent-swarm'; project.mkdir(parents=True); gui = root / 'gui'; gui.mkdir()
+        registry = self.make_registry(root, catalog, gui)
         binary = root / 'herdr'; binary.write_text('#!/bin/sh\n'); binary.chmod(0o700)
         session = state / 'sessions' / TASK / 'session.jsonl'; herdr = Herdr(session)
-        controller = Controller(state, herdr=binary, project_root=catalog, hostname='MacBookLeo-test', gui_cwd=gui, run=herdr)
+        controller = Controller(state, herdr=binary, project_root=catalog, hostname='MacBookLeo-test', gui_cwd=gui, registry=registry, run=herdr)
         return directory, controller, herdr, session
+
+    def test_real_hostname_prefixes_select_controller_host_in_any_case(self):
+        nodes = (os.uname().nodename, subprocess.run(
+            ['hostname', '-s'], check=True, text=True, capture_output=True).stdout.strip())
+        for node in (*nodes, 'MacMiniLeo'):
+            short = node.split('.')[0]
+            for prefix in (short, short.lower(), short.upper()):
+                for hostname in (node, short + '.example.test'):
+                    with self.subTest(prefix=prefix, hostname=hostname), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        catalog = root / 'catalog'; catalog.mkdir()
+                        gui = root / 'gui'; gui.mkdir()
+                        binary = root / 'herdr'; binary.write_text('#!/bin/sh\n'); binary.chmod(0o700)
+                        registry = self.make_registry(root, catalog, gui, prefix)
+                        calls = []
+                        controller = Controller(root / 'state', herdr=binary, hostname=hostname,
+                                                registry=registry, run=lambda *a, **k: calls.append(a))
+                        self.assertEqual(controller.host['name'], 'mini')
+                        self.assertEqual(controller.project, catalog.resolve())
+                        self.assertEqual(controller.gui_cwd, gui.resolve())
+                        self.assertEqual(calls, [])
+                        with self.assertRaisesRegex(TaskError, '^UNSUPPORTED_HOST$'):
+                            Controller(root / 'unrelated-state', herdr=binary,
+                                       hostname='unrelated-' + hostname, registry=registry)
+                        self.assertFalse((root / 'unrelated-state').exists())
 
     def test_envelope_has_six_fields_and_accepts_executor_mode_only(self):
         self.assertEqual(herdr_task._envelope(ENVELOPE), ENVELOPE)
@@ -185,7 +217,7 @@ class HerdrTaskTests(unittest.TestCase):
         directory, controller, _, _ = self.make()
         with directory:
             cli = Path(__file__).parents[1] / 'bin' / 'swarm-herdr-task'
-            completed = subprocess.run([str(cli), 'submit', '--state-dir', str(controller.state), '--project-root', str(controller.project), '--herdr', str(controller.herdr)], input=b'x' * 65537, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            completed = subprocess.run([str(cli), 'submit', '--state-dir', str(controller.state), '--project-root', str(controller.project), '--herdr', str(controller.herdr), '--registry', str(controller.registry.path)], input=b'x' * 65537, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.assertEqual(completed.returncode, 2)
             self.assertEqual(json.loads(completed.stdout)['diagnostic_code'], 'INPUT_TOO_LARGE')
 
@@ -261,22 +293,21 @@ class HerdrTaskTests(unittest.TestCase):
     def test_catalog_project_validation_handles_nested_default_explicit_and_escapes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); state = root / 'state'; catalog = root / 'catalog'; child = catalog / 'leo' / 'mac-agent-swarm'; child.mkdir(parents=True); gui = root / 'gui'; gui.mkdir(); binary = root / 'herdr-real'; binary.write_text(''); binary.chmod(0o700); link = root / 'herdr'; link.symlink_to(binary)
-            with self.assertRaises(TaskError): Controller(state, herdr=binary, hostname='OtherHost', gui_cwd=gui, run=lambda *_a, **_k: None)
-            with self.assertRaises(TaskError): Controller(state, herdr=binary, project_root=root / '..', hostname='MacBookLeo', gui_cwd=gui, run=lambda *_a, **_k: None)
+            registry = self.make_registry(root, catalog, gui)
+            with self.assertRaises(TaskError): Controller(state, herdr=binary, hostname='OtherHost', gui_cwd=gui, registry=registry, run=lambda *_a, **_k: None)
+            with self.assertRaises(TaskError): Controller(state, herdr=binary, project_root=root / '..', hostname='MacBookLeo', gui_cwd=gui, registry=registry, run=lambda *_a, **_k: None)
             session = state / 'sessions' / TASK / 'session.jsonl'; fake = Herdr(session)
-            self.assertEqual(Controller(state, herdr=link, project_root=catalog, hostname='OtherHost', gui_cwd=gui, run=fake).submit(ENVELOPE)['status'], 'submitted')
+            self.assertEqual(Controller(state, herdr=link, project_root=catalog, hostname='OtherHost', gui_cwd=gui, registry=registry, run=fake).submit(ENVELOPE)['status'], 'submitted')
             default_task = {**ENVELOPE, 'task_id': '550e8400-e29b-41d4-a716-446655440003'}
             default_session = root / 'state-default' / 'sessions' / default_task['task_id'] / 'session.jsonl'
-            registry = root / 'hosts.json'
-            registry.write_text(json.dumps({'version': 1, 'hub': 'mini', 'share': {'host': 'hub.local', 'name': 'projects', 'user': 'leo'}, 'hosts': {'mini': {'hostname_prefix': 'MacMiniLeo', 'role': 'hub', 'ssh_alias': 'swarm-mini', 'address': 'hub.local', 'catalog_root': str(catalog), 'repo': str(root), 'path': '/usr/bin:/bin', 'gui_cwd': str(gui), 'runtimes': ['pi']}}}))
             default = Controller(root / 'state-default', herdr=binary, hostname='MacMiniLeo-test', registry=registry, run=Herdr(default_session))
             self.assertEqual(default.gui_cwd, gui.resolve())
             self.assertEqual(default.submit(default_task)['status'], 'submitted')
             missing = {**ENVELOPE, 'task_id': '550e8400-e29b-41d4-a716-446655440001', 'project': 'leo/missing'}
-            with self.assertRaises(TaskError): Controller(root / 'state2', herdr=binary, project_root=catalog, hostname='OtherHost', gui_cwd=gui, run=lambda *_a, **_k: None).submit(missing)
+            with self.assertRaises(TaskError): Controller(root / 'state2', herdr=binary, project_root=catalog, hostname='OtherHost', gui_cwd=gui, registry=registry, run=lambda *_a, **_k: None).submit(missing)
             (catalog / 'escape').symlink_to(root, target_is_directory=True)
             escaped = {**ENVELOPE, 'task_id': '550e8400-e29b-41d4-a716-446655440002', 'project': 'escape'}
-            with self.assertRaises(TaskError): Controller(root / 'state3', herdr=binary, project_root=catalog, hostname='OtherHost', gui_cwd=gui, run=lambda *_a, **_k: None).submit(escaped)
+            with self.assertRaises(TaskError): Controller(root / 'state3', herdr=binary, project_root=catalog, hostname='OtherHost', gui_cwd=gui, registry=registry, run=lambda *_a, **_k: None).submit(escaped)
 
 
 if __name__ == '__main__': unittest.main()

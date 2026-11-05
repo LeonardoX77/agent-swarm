@@ -1,37 +1,51 @@
 # Guided Agent Swarm setup
 
-The only onboarding path is `swarm-setup add-host` from an already registered Mac. It configures the Herdr + Pi channel resumably and pauses for decisions that only a person at the relevant host can make.
+The onboarding path is `swarm-setup add-host` from an already registered macOS or Linux/WSL node. It configures the Herdr + Pi channel resumably and pauses for decisions only a person at the relevant host can make. Linux/WSL runs the same ten phases with CIFS and systemd user timers; a real delegation to this WSL has been tested, but bidirectional acceptance between two machines remains unvalidated.
 
 ## Quick path
 
 1. Confirm the origin appears in `config/hosts.json` (an unversioned local registry; create one from `config/hosts.example.json` if absent) and run the command from its local checkout.
-2. Follow [Add a host](add-host.md#quick-path) with the new Mac's name, address, and user.
-3. Complete local pauses: Remote Login, fingerprint comparison, Pi GUI login, and initial SMB access.
-4. Repeat exactly the same command and options until bidirectional acceptance completes.
+2. Follow [Add a machine](add-host.md#quick-path) with the new machine's name, address, and user. For Linux/WSL, first follow [preparation](add-host.md#linuxwsl-preparation).
+3. Complete local pauses: SSH access, fingerprint comparison, and Pi login; for SMB, Finder/Keychain on macOS or fstab and local credentials on Linux.
+4. Repeat the same command with the same options until bidirectional acceptance completes successfully.
 5. Before delegating work, run `swarm-delegate preflight <target>` and follow the [validation runbook](../runbooks/agent-swarm/validation.md).
 
-The registry is the source of truth. Its `hosts`, `share`, and role fields determine aliases, endpoints, users, catalog, repository, and paths. Do not replace them with computer names, IPs, or paths from another deployment.
+The registry is the source of truth. Its `hosts`, `share`, and role fields determine aliases, endpoints, users, catalog, repository, and paths. Do not replace them with machine names, IP addresses, or paths from another deployment.
+
+## Linux/WSL before onboarding
+
+- Prepare SSH, Node, Python 3, and Pi; make the Herdr server available and complete Pi login locally. `--install-missing` can add Herdr with the official installer at https://herdr.dev/install.sh (downloaded to a temporary file and run only if the download succeeds; requires curl) and gentle-pi through Pi. Homebrew is not required.
+- The official Herdr Pi integration is mandatory on both platforms: `herdr integration status` must confirm Pi is installed. `--install-missing` runs `herdr integration install pi` when Herdr is available (dry-run only reports the plan); it installs `~/.pi/agent/extensions/herdr-agent-state.ts`. Without it, the `agent_session` ownership proof of kind `path`, source `herdr:pi`, is absent: submit can become `unknown` without delivering the prompt.
+- To start Herdr without a GUI on Linux, run `herdr` in a normal terminal and detach it, or use a pty with non-zero rows and columns. The server survives the client exiting. Herdr 0.9.5 rejects a zero-grid terminal (`cannot attach without a usable terminal: terminal reported a zero-sized grid`) and has no `herdr server start` (only `server stop` and `server reload-config`). Check `herdr tab list`; `server_not_running` means it must be started. The wait displays missing probe names and start instructions when `herdr-server` is missing.
+- Setup and swarm-update discover `$HOME/.pi/agent/bin`, where Pi's installer installs, immediately after `$HOME/.local/bin`; they retain all other paths and their order.
+- For a spoke, run `swarm-smb-mount fstab-line --host H --share S --user U`. A person adds the exact line to `/etc/fstab` as root, creates `/mnt/<share>`, and creates `~/.config/agent-swarm/smb-credentials` with mode `0600`. The tool never uses sudo or handles passwords. Setup mounts and configures a user timer every 300 seconds; without `systemctl --user`, it warns that persistence was not enabled.
+- Daily updates use `agent-swarm-update.timer` unless `--no-auto-update`. In WSL, enable `[boot]` / `systemd=true` in `/etc/wsl.conf`; timers require a user session unless `loginctl enable-linger $USER` is enabled.
+- A Linux hub must publish its catalog manually through its own SMB server, such as Samba; setup does not configure it. Windows can occupy TCP port 445 on loopback, so use another port for a local SMB test.
+
+Read [preparation details](add-host.md#linuxwsl-preparation) and the [evidence and limits](../runbooks/agent-swarm/test-evidence.md#linuxwsl-evidence) before delegating.
 
 ## Human pauses
 
+Fingerprint and login checks are shared. SSH and SMB actions depend on the platform:
+
 | Moment | Local action | Safe confirmation |
 | --- | --- | --- |
-| Remote access | Enable Remote Login for the registered account and confirm the selected network. | The SSH port responds from the origin. |
-| SSH fingerprint | Compare the fingerprint shown at the host with the scan from the origin. | They match; `StrictHostKeyChecking` remains enabled. |
-| Runtimes and login | Install approved software and complete Pi GUI login when requested. | Checks find Pi, gentle-pi, and Herdr. |
-| SMB | In Finder, connect to the URL shown by setup; save the password only in Keychain when appropriate. | The registered catalog appears on the spoke. |
-| Acceptance | Resolve `Not logged in` in the indicated GUI and resume the same setup. | Preflight and acceptance finish both ways. |
+| Remote access | Enable Remote Login on macOS or a Linux `sshd` for the registered account; confirm the network. | The SSH port responds from the origin. |
+| SSH fingerprint | Compare the host fingerprint with the origin scan. | They match; `StrictHostKeyChecking` stays enabled. |
+| Runtimes and login | Install approved software and complete local Pi login when requested. | Checks find Pi, gentle-pi, Herdr, its server, and official Pi integration. |
+| SMB | macOS: Finder and Keychain. Linux: fstab entry and protected credential file; run the specified mount. | The registered catalog appears on the spoke. |
+| Acceptance | Resolve `Not logged in` from the indicated GUI and resume the same setup. | Preflight and acceptance complete in both directions. |
 
 ## Boundaries
 
 - Setup does not authorize network changes, `sudo`, credentials, or installations outside its phases.
-- Profiles, Keychain, sessions, caches, and home directories stay on each Mac.
-- The skill is copied through setup's local mechanism; SMB carries neither credentials nor home directories.
-- Store only sanitized state, phase, version, and exit code. Do not store passwords, tokens, private keys, or task envelopes in shared tickets or logs.
-- If a result is ambiguous, consult persistent state before retrying. Do not restart existing sessions to force recovery.
+- Profiles, sessions, caches, and home directories remain on each node; Keychain applies only to macOS.
+- The skill is copied by setup's local mechanism; SMB carries neither credentials nor home directories.
+- Save only sanitized state, phase, version, and exit code. Do not save passwords, tokens, private keys, or task envelopes in shared tickets or logs.
+- If a result is ambiguous, inspect persistent state before retrying. Do not restart existing sessions to force recovery.
 
 ## Subsequent operation
 
-Use `swarm-delegate list` to see destinations, `self` to identify the origin, and `preflight <target>` before submitting a task. The [Herdr + Pi tasks runbook](../runbooks/agent-swarm/herdr-tasks.md) documents `submit`, `recover`, and `close`, including retaining the same UUID after a transport failure.
+Use `swarm-delegate list` to see destinations, `self` to identify the origin, and `preflight <target>` before submitting a task. The [Herdr + Pi tasks runbook](../runbooks/agent-swarm/herdr-tasks.md) describes `submit`, `recover`, and `close`, including the requirement to retain the same UUID after a transport failure.
 
-For phase, option, state, and recovery diagnosis, read [Add a host](add-host.md). For SSH and SMB, use [SSH channel](../runbooks/agent-swarm/ssh-channel.md) and [SMB mount](../runbooks/agent-swarm/smb-mount.md), respectively.
+For phase, option, state, and recovery diagnosis, see [Add a machine](add-host.md). For SSH and SMB, use the [SSH channel](../runbooks/agent-swarm/ssh-channel.md) and [SMB mounting](../runbooks/agent-swarm/smb-mount.md), respectively.

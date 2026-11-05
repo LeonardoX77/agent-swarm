@@ -1,6 +1,9 @@
 import contextlib
 import io
 import json
+import shlex
+import tempfile
+from unittest.mock import patch
 import subprocess
 import sys
 import unittest
@@ -18,6 +21,9 @@ REGISTRY = {
     'mac-mini': {'name': 'mac-mini', 'role': 'spoke', 'ssh_alias': 'swarm-mac-mini', 'catalog_root': '/Volumes/agent projects', 'repo': '/Volumes/agent projects/leo/mac-agent-swarm', 'path': '/opt/homebrew/bin:/usr/bin:/bin', 'gui_cwd': '/Users/leo/tmp', 'runtimes': ['pi']},
 }
 TASK = '550e8400-e29b-41d4-a716-446655440000'
+RESOLVER = ('PATH=/opt/homebrew/bin:/usr/bin:/bin; export PATH; '
+            'if test -x /usr/bin/python3; then python=/usr/bin/python3; '
+            'else python=$(command -v python3) || exit 127; fi; ')
 
 
 class FakeRegistry:
@@ -88,8 +94,48 @@ class SwarmDelegateTests(unittest.TestCase):
         envelope = '{"task_id":"%s"}' % TASK
         code, result = self.invoke(['submit', 'mac-mini'], run, envelope)
         self.assertEqual((code, result), (0, {'status': 'submitted'}))
-        self.assertEqual(run.calls[0][0], ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4', 'swarm-mac-mini', "PATH=/opt/homebrew/bin:/usr/bin:/bin /usr/bin/python3 '/Volumes/agent projects/leo/mac-agent-swarm/automation/agent-swarm/bin/swarm-herdr-task' submit"])
+        self.assertEqual(run.calls[0][0], ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4', 'swarm-mac-mini', RESOLVER + "\"$python\" '/Volumes/agent projects/leo/mac-agent-swarm/automation/agent-swarm/bin/swarm-herdr-task' submit"])
         self.assertEqual(run.calls[0][1]['input'], envelope)
+
+    def test_remote_interpreter_resolution_and_preflight_in_posix_shell(self):
+        # Override only the absolute-interpreter probe to model a Linux image
+        # without /usr/bin/python3; never change the real filesystem or use SSH.
+        for absolute in (True, False):
+            with self.subTest(absolute=absolute), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo = root / "repo ' quoted; $value"
+                adapter = repo / 'automation/agent-swarm/bin/swarm-herdr-task'
+                adapter.parent.mkdir(parents=True)
+                adapter.write_text('import json, os, sys\nprint(json.dumps({"interpreter": os.environ.get("SELECTED", "absolute"), "args": sys.argv[1:], "stdin": sys.stdin.read(), "path": os.environ["PATH"]}))\n')
+                adapter.chmod(0o700)
+                binaries = root / "bin ' quoted"; binaries.mkdir()
+                fallback = binaries / 'python3'
+                fallback.write_text('#!/bin/sh\nSELECTED=fallback; export SELECTED\nexec ' + shlex.quote(sys.executable) + ' "$@"\n')
+                fallback.chmod(0o700)
+                catalog = root / "catalog ' quoted"; catalog.mkdir()
+                host = {**REGISTRY['mac-mini'], 'repo': str(repo),
+                        'path': str(binaries), 'catalog_root': str(catalog)}
+                probe = ('test() { if [ "$1" = -x ] && [ "$2" = /usr/bin/python3 ]; '
+                         'then return %s; else command test "$@"; fi; }; ' % (0 if absolute else 1))
+                commands = []
+                def run(argv, **kwargs):
+                    commands.append(argv[-1])
+                    return subprocess.run(['/bin/sh', '-c', probe + argv[-1]], **kwargs)
+                with patch.dict(REGISTRY, {'mac-mini': host}):
+                    for action, arguments in (('submit', []), ('recover', [TASK, '--wait', '0']), ('close', [TASK])):
+                        code, result = self.invoke([action, 'mac-mini', *arguments], run, 'payload')
+                        self.assertEqual(code, 0)
+                        self.assertEqual(result, {'interpreter': 'absolute' if absolute else 'fallback',
+                                                 'args': [action, *arguments], 'stdin': 'payload' if action == 'submit' else '',
+                                                 'path': str(binaries)})
+                    code, result = self.invoke(['preflight', 'mac-mini'], run)
+                    self.assertEqual((code, result), (0, {'status': 'ready', 'target': 'mac-mini'}))
+                    # No interpreter in the configured PATH must fail preflight.
+                    if not absolute:
+                        host['path'] = str(root / 'missing-bin')
+                        code, result = self.invoke(['preflight', 'mac-mini'], run)
+                        self.assertEqual((code, result['status']), (1, 'catalog_missing'))
+                self.assertTrue(all(command.startswith('PATH=') for command in commands))
 
     def test_recover_and_close_quote_arguments_and_validate_uuid_wait(self):
         run = self.runner()
@@ -122,7 +168,7 @@ class SwarmDelegateTests(unittest.TestCase):
         run = self.runner(returncode=1)
         code, result = self.invoke(['preflight', 'mac-mini'], run)
         self.assertEqual((code, result['status'], result['hint']), (1, 'catalog_missing', 'run swarm-smb-mount mount on that host'))
-        self.assertIn("test -x '/Volumes/agent projects/leo/mac-agent-swarm/automation/agent-swarm/bin/swarm-herdr-task' && test -d '/Volumes/agent projects'", run.calls[0][0][-1])
+        self.assertEqual(RESOLVER + "test -x '/Volumes/agent projects/leo/mac-agent-swarm/automation/agent-swarm/bin/swarm-herdr-task' && test -d '/Volumes/agent projects'", run.calls[0][0][-1])
         code, result = self.invoke(['submit', 'macbook'], self.runner(), '{}')
         self.assertEqual((code, result['diagnostic_code']), (2, 'SELF_TARGET'))
 

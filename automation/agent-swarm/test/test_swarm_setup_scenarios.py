@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "lib"))
-from swarm_setup import Setup
+from swarm_setup import Setup, SetupError
 from herdr_task import TaskError, _envelope
 from host_registry import HostRegistry
 
@@ -30,6 +30,7 @@ class FakeMacs:
         self.remote_home = Path(self.remote.name)
         self.port_open_after, self.authorized_after, self.keychain_after = 2, 2, 1
         self.port_polls = self.authorization_polls = self.keychain_polls = 0
+        self.system = "Darwin"
         self.tools = {"brew", "herdr", "node", "pi", "gentle-pi", "python3"}
         self.mounted = self.reverse_alias = self.update_installed = False
         self.update_calls, self.nonces = [], []
@@ -70,6 +71,8 @@ class FakeMacs:
             return Result(result.returncode, result.stdout, result.stderr)
         if command.startswith("PYTHONDONTWRITEBYTECODE=1 "):
             command = command.split(" ", 1)[1]
+        if command == "uname -s": return Result(out=self.system + "\n")
+        if command == "hostname -s": return Result(out="Bea\n")
         if command == 'printf %s "$HOME"': return Result(out=str(self.remote_home))
         if command == "true": return Result(0 if self.authorization_polls >= self.authorized_after else 1)
         if command.startswith("command -v "):
@@ -82,11 +85,15 @@ class FakeMacs:
             available = "gentle-pi" in self.tools and (not self.nvm_only_pi or str(self.remote_home / ".nvm/versions/node/v24.19.0/bin") in path_prefix.split(":"))
             return Result(0 if available else 1, "gentle-pi\n")
         if command == "herdr tab list": return Result()
+        if command == "herdr integration status 2>/dev/null | grep -E '^pi: ' | grep -v 'not installed'":
+            return Result(out="pi: installed\n")
         if command == "scutil --get LocalHostName": return Result(out="Bea\n")
         if command.startswith("ssh -o BatchMode=yes swarm-origin true"):
             return Result(0 if self.reverse_alias else 1)
-        if command.startswith("ssh-keyscan -t ed25519 "):
-            return Result(out="Origin.local ssh-ed25519 ORIGINKEY\n")
+        if command.startswith("ssh-keyscan "):
+            words = shlex.split(command)
+            host = "[Origin.local]:" + words[words.index("-p") + 1] if "-p" in words else "Origin.local"
+            return Result(out=host + " ssh-ed25519 ORIGINKEY\n")
         if command.endswith(" | ssh-keygen -lf -"):
             return Result(out="256 SHA256:ORIGINFP origin\n")
         if command.startswith("test -f ") and "ssh-keygen -t ed25519" in command:
@@ -97,7 +104,7 @@ class FakeMacs:
             return Result(out=Path(shlex.split(command)[1]).read_text())
         if command.startswith("python3 -") or command.startswith("/usr/bin/python3 -"):
             result = self._remote_python(command, program)
-            if "Host swarm-origin" in command: self.reverse_alias = True
+            if "Host swarm-origin" in command and "p.write_text" in program: self.reverse_alias = True
             return result
         if "swarm-smb-mount status" in command:
             return Result(out=json.dumps({"mounted": self.mounted}))
@@ -105,7 +112,9 @@ class FakeMacs:
             self.keychain_polls += 1
             self.mounted = self.keychain_polls >= self.keychain_after
             return Result(0 if self.mounted else 1)
-        if command.startswith("test -d /Volumes/"): return Result(0 if self.mounted else 1)
+        if command.startswith("test -d /Volumes/") or command.startswith("test -d /mnt/"): return Result(0 if self.mounted else 1)
+        if "swarm-smb-mount fstab-line" in command:
+            return Result(out=json.dumps({"fstab_line": "EXACT FSTAB LINE", "credentials_template": "username=leo\npassword=<your SMB password>\n", "credentials_mode": "0600"}))
         if "swarm-update" in command and command.endswith(" status"):
             return Result(0 if self.update_installed else 1, json.dumps({"hour": 4, "minute": 30, "loaded": self.update_installed}))
         if "swarm-update" in command and " install --hour " in command:
@@ -191,7 +200,7 @@ class SetupScenarioTests(unittest.TestCase):
                       host_fingerprint="SHA256:NEWFP", output=output,
                       sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
                       clock=lambda: now[0], wait_timeout=1, update_time="04:30", **options)
-        setup.socket_check = lambda address: machines.socket_check()
+        setup.socket_check = lambda address, port=22: machines.socket_check()
         return setup, registry_path
 
     def run_zero_to_done(self, **options):
@@ -205,6 +214,109 @@ class SetupScenarioTests(unittest.TestCase):
     def snapshot(root):
         return {path.relative_to(root): (path.read_bytes(), path.stat().st_mode & 0o777)
                 for path in root.rglob("*") if path.is_file()}
+
+    def test_nondefault_reverse_port_and_safe_port_reruns(self):
+        machines, first, registry_path = self.run_zero_to_done(ssh_port=2222, origin_ssh_port=2200)
+        config = machines.remote_home / ".ssh/config"
+        self.assertIn("  HostName Origin.local\n  Port 2200\n  User ", config.read_text())
+        self.assertEqual((machines.remote_home / ".ssh/known_hosts").read_bytes(), b"[Origin.local]:2200 ssh-ed25519 ORIGINKEY\n")
+        self.assertEqual(machines.remote_commands.count("ssh-keyscan -p 2200 -t ed25519 Origin.local"), 2)
+        self.assertTrue(any("'[Origin.local]:2200 ssh-ed25519 ORIGINKEY" in c and "ssh-keygen -lf -" in c for c in machines.remote_commands))
+        state = json.loads(first.state_path.read_text())
+        self.assertEqual((state["ssh_port"], state["origin_ssh_port"]), (2222, 2200))
+        rerun, _ = self.make_setup(machines, registry_path, ssh_port=2222, origin_ssh_port=2200)
+        before = self.snapshot(machines.remote_home)
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertEqual(rerun.changed, [])
+        self.assertEqual(self.snapshot(machines.remote_home), before)
+        for ports in ({"ssh_port": 22, "origin_ssh_port": 2200}, {"ssh_port": 2222, "origin_ssh_port": 22}):
+            before = self.snapshot(machines.remote_home); registry_before = registry_path.read_bytes()
+            rerun, _ = self.make_setup(machines, registry_path, **ports)
+            self.assertEqual(rerun.run(), 1)
+            self.assertIn("SSH alias conflict for swarm-", rerun.output.getvalue())
+            self.assertEqual(self.snapshot(machines.remote_home), before)
+            self.assertEqual(registry_path.read_bytes(), registry_before)
+            self.assertEqual(json.loads(first.state_path.read_text())["origin_ssh_port"], 2200)
+
+    def test_reverse_alias_port_conflict_without_saved_state(self):
+        machines, first, registry_path = self.run_zero_to_done()
+        before = self.snapshot(machines.remote_home)
+        rerun, _ = self.make_setup(machines, registry_path, origin_ssh_port=2222)
+        rerun.state = {"name": "bea", "phases": {}}
+        self.assertEqual(rerun.run(), 1)
+        self.assertIn("SSH alias conflict for swarm-origin", rerun.output.getvalue())
+        self.assertEqual(self.snapshot(machines.remote_home), before)
+
+    def test_linux_zero_to_done_installs_helpers_and_uses_mnt_catalog(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.system = "Linux"; machines.tools.remove("brew")
+        setup, registry_path = self.make_setup(machines)
+        self.assertEqual(setup.run(), 0, setup.output.getvalue())
+        entry = HostRegistry(registry_path).get("bea")
+        self.assertEqual(entry["catalog_root"], "/mnt/projects")
+        self.assertEqual(entry["repo"], "/mnt/projects/leo/mac-agent-swarm")
+        self.assertEqual(entry["gui_cwd"], str(machines.remote_home / "tmp"))
+        for name in ("swarm-smb-mount", "swarm-update"):
+            self.assertTrue((machines.remote_home / ".local/agent-swarm/bin" / name).is_file())
+        self.assertIn("--persistent", next(c for c in machines.remote_commands if "swarm-smb-mount mount" in c))
+        self.assertEqual(len(machines.update_calls), 1)
+        self.assertIn("install --hour 04 --minute 30", machines.update_calls[0])
+        rerun, _ = self.make_setup(machines, registry_path)
+        before = registry_path.read_bytes()
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertEqual(rerun.changed, [])
+        self.assertEqual(registry_path.read_bytes(), before)
+        self.assertEqual(len(machines.update_calls), 1)
+        self.assertEqual(machines.keychain_polls, 1)
+
+    def test_mount_warning_is_visible_directly_and_after_human_step(self):
+        warning = "systemctl --user is unavailable; mount persistence was not enabled"
+        for human in (False, True):
+            with self.subTest(human=human):
+                machines = FakeMacs(); self.addCleanup(machines.close)
+                machines.system = "Linux"
+                original = machines._remote
+                def remote(command, program):
+                    if "swarm-smb-mount mount" in command:
+                        machines.mounted = not human
+                        return Result(1 if human else 0, json.dumps({"ok": not human, "mounted": not human, "persistent": False, "warning": warning}))
+                    if "swarm-smb-mount status" in command and machines.mounted:
+                        return Result(out=json.dumps({"ok": True, "mounted": True, "persistent": False, "warning": warning}, separators=(",", ":")))
+                    return original(command, program)
+                machines._remote = remote
+                setup, _ = self.make_setup(machines)
+                original_wait = setup.wait_for
+                def wait(message, condition):
+                    if "EXACT FSTAB LINE" in message: machines.mounted = True
+                    return original_wait(message, condition)
+                setup.wait_for = wait
+                self.assertEqual(setup.run(), 0, setup.output.getvalue())
+                self.assertIn("WARNING: " + warning + "\n", setup.output.getvalue())
+                self.assertIn(warning, next(detail for phase, status, detail in setup.results if phase == "mount"))
+
+    def test_linux_fstab_human_step_waits_without_registry_or_credentials_changes(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.system = "Linux"; machines.keychain_after = 99
+        setup, registry_path = self.make_setup(machines, no_wait=True)
+        setup.local_preflight()
+        before = registry_path.read_bytes()
+        from swarm_setup import Waiting
+        with self.assertRaises(Waiting) as raised: setup.mount()
+        message = str(raised.exception)
+        for text in ("EXACT FSTAB LINE", "/etc/fstab", "root", "/mnt/projects", "0600", ".config/agent-swarm/smb-credentials"):
+            self.assertIn(text, message)
+        self.assertNotIn("Finder", message)
+        self.assertEqual(registry_path.read_bytes(), before)
+        self.assertFalse((machines.remote_home / ".config/agent-swarm/smb-credentials").exists())
+        self.assertEqual(machines.update_calls, [])
+
+    def test_linux_mounted_catalog_does_not_copy_helper(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.system = "Linux"; machines.mounted = True
+        setup, _ = self.make_setup(machines)
+        self.assertEqual(setup.mount(), ("ok", "catalog already mounted"))
+        self.assertEqual(machines.scp_destinations, [])
+        self.assertEqual(machines.keychain_polls, 0)
 
     def test_zero_to_done_without_tty(self):
         machines, setup, registry_path = self.run_zero_to_done()
@@ -264,6 +376,7 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertIn(public_line, setup.log_path.read_text())
         self.assertEqual((machines.remote_home / ".ssh/authorized_keys").read_text().count(public_line), 1)
 
+    @unittest.skipUnless(Path("/bin/zsh").is_file(), "requires /bin/zsh")
     def test_remote_path_discovery_ignores_missing_nvm_versions_in_zsh(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
         setup, _ = self.make_setup(machines)
@@ -311,6 +424,27 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertEqual(remote_before, self.snapshot(machines.remote_home))
         self.assertEqual(registry_before, registry_path.read_bytes())
         self.assertEqual(len(machines.nonces), submits_before)
+
+    def test_reverse_port_22_rejects_nondefault_alias_without_state(self):
+        machines, first, registry_path = self.run_zero_to_done(origin_ssh_port=2200)
+        first.state_path.unlink()
+        config = machines.remote_home / ".ssh/config"
+        config_before = config.read_bytes()
+        registry_before = registry_path.read_bytes()
+        rerun, _ = self.make_setup(machines, registry_path, origin_ssh_port=22)
+        code = rerun.run()
+        self.assertEqual(config.read_bytes(), config_before)
+        self.assertEqual(registry_path.read_bytes(), registry_before)
+        self.assertEqual(code, 1, rerun.output.getvalue())
+        self.assertIn("SSH alias conflict for swarm-origin", rerun.output.getvalue())
+
+    def test_unspecified_origin_port_still_reuses_a_working_alias(self):
+        machines, first, registry_path = self.run_zero_to_done(origin_ssh_port=2200)
+        first.state_path.unlink()
+        config_before = (machines.remote_home / ".ssh/config").read_bytes()
+        rerun, _ = self.make_setup(machines, registry_path)
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertEqual((machines.remote_home / ".ssh/config").read_bytes(), config_before)
 
     def test_dry_run_on_zero_state_reports_changes_and_writes_nothing(self):
         machines = FakeMacs(); self.addCleanup(machines.close)

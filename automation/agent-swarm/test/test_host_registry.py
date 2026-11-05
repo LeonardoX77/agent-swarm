@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,6 +57,32 @@ class HostRegistryTests(unittest.TestCase):
         value = {**VALID, 'hosts': {**VALID['hosts'], 'mac-mini': {**VALID['hosts']['mac-mini'], 'hostname_prefix': 'MacBookLeo-mini'}}}
         with self.assertRaises(RegistryError):
             HostRegistry(self.write(value))
+
+    def test_real_hostname_prefixes_match_in_any_case(self):
+        nodes = (os.uname().nodename, subprocess.run(
+            ['hostname', '-s'], check=True, text=True, capture_output=True).stdout.strip())
+        for node in (*nodes, 'MacMiniLeo', 'StraßeHost'):
+            short = node.split('.')[0]
+            for prefix in (short, short.lower(), short.upper()):
+                with self.subTest(node=node, prefix=prefix):
+                    host = {**VALID['hosts']['macbook'], 'hostname_prefix': prefix}
+                    value = {**VALID, 'hosts': {'macbook': host}}
+                    registry = HostRegistry(self.write(value))
+                    for name in (node, short + '.example.test'):
+                        self.assertEqual(registry.self_host(name)['name'], 'macbook')
+                    self.assertIsNone(registry.self_host('unrelated-' + node))
+                    self.assertIsNone(registry.self_host(None))
+
+    def test_rejects_casefolded_duplicate_and_overlapping_prefixes(self):
+        for prefix in ('macbookleo', 'MACBOOKLEO-mini', 'macbook'):
+            with self.subTest(prefix=prefix):
+                value = {**VALID, 'hosts': {**VALID['hosts'], 'mac-mini': {
+                    **VALID['hosts']['mac-mini'], 'hostname_prefix': prefix}}}
+                path = self.write(value)
+                before = path.read_bytes()
+                with self.assertRaisesRegex(RegistryError, '^INVALID_HOST_REGISTRY$'):
+                    HostRegistry(path)
+                self.assertEqual(path.read_bytes(), before)
 
     def test_example_registry_validates_and_is_generic(self):
         example = Path(__file__).parents[3] / 'config' / 'hosts.example.json'

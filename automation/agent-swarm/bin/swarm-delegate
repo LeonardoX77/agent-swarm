@@ -41,11 +41,22 @@ def _wait(value):
     return result
 
 
+def _remote_python(host):
+    """Prefer the macOS/Debian interpreter, otherwise resolve on registry PATH.
+
+    Use POSIX shell syntax: the remote login shell need not be bash.
+    Preflight uses the same resolution as every adapter invocation.
+    """
+    return ('PATH=' + shlex.quote(host['path']) + '; export PATH; '
+            'if test -x /usr/bin/python3; then python=/usr/bin/python3; '
+            'else python=$(command -v python3) || exit 127; fi; ')
+
+
 def _remote_command(host, action, remote_args):
     adapter = host['repo'] + '/automation/agent-swarm/bin/swarm-herdr-task'
-    parts = ['PATH=' + shlex.quote(host['path']), shlex.quote('/usr/bin/python3'), shlex.quote(adapter), shlex.quote(action)]
+    parts = ['"$python"', shlex.quote(adapter), shlex.quote(action)]
     parts.extend(shlex.quote(argument) for argument in remote_args)
-    return ' '.join(parts)
+    return _remote_python(host) + ' '.join(parts)
 
 
 def _ssh(host, command, runner, input=None):
@@ -107,7 +118,7 @@ def main(argv=None, *, runner=subprocess.run, registry=None, nodename=None, stdi
             if args.task_id:
                 raise ValueError('INVALID_INPUT')
             adapter = host['repo'] + '/automation/agent-swarm/bin/swarm-herdr-task'
-            command = 'test -x %s && test -d %s' % (shlex.quote(adapter), shlex.quote(host['catalog_root']))
+            command = _remote_python(host) + 'test -x %s && test -d %s' % (shlex.quote(adapter), shlex.quote(host['catalog_root']))
             completed = _ssh(host, command, runner)
             if completed.returncode == 0:
                 _json({'status': 'ready', 'target': args.target}, stdout)

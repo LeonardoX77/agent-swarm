@@ -72,7 +72,8 @@ class HostRegistry:
         if hubs != [value['hub']]:
             raise RegistryError('INVALID_HOST_REGISTRY')
         for index, prefix in enumerate(prefixes):
-            if any(prefix != other and (prefix.startswith(other) or other.startswith(prefix)) for other in prefixes[index + 1:]):
+            folded = prefix.casefold()
+            if any(prefix != other and (folded.startswith(other.casefold()) or other.casefold().startswith(folded)) for other in prefixes[index + 1:]):
                 raise RegistryError('INVALID_HOST_REGISTRY')
         return result, value['hub'], dict(share)
 
@@ -89,7 +90,8 @@ class HostRegistry:
     def self_host(self, nodename):
         if not isinstance(nodename, str):
             return None
+        folded = nodename.casefold()
         for host in self._hosts.values():
-            if nodename.startswith(host['hostname_prefix']):
+            if folded.startswith(host['hostname_prefix'].casefold()):
                 return host
         return None

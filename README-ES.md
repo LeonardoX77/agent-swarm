@@ -61,12 +61,12 @@ flowchart LR
 
 El protocolo sólo necesita herramientas Unix estándar: SSH, Python 3, un recurso SMB y Herdr con Pi. Por eso está pensado para cualquier sistema tipo Unix.
 
-| Componente | macOS | Linux y otros Unix |
+| Componente | macOS | Linux / WSL |
 | --- | --- | --- |
-| Delegación de tareas (`swarm-delegate`, `swarm-herdr-task`) | ✅ | Diseño portable; aún no validado |
-| Alta automática (`swarm-setup`) | ✅ | Pendiente |
-| Montaje SMB persistente (`swarm-smb-mount`) | ✅ usa Keychain y launchd | Pendiente: montar el recurso a mano |
-| Actualización diaria (`swarm-update`) | ✅ usa launchd | Pendiente |
+| Delegación de tareas (`swarm-delegate`, `swarm-herdr-task`) | ✅ | Delegación de extremo a extremo no validada |
+| Alta (`swarm-setup`) | ✅ | Las mismas diez fases; la persona prepara el acceso CIFS |
+| Montaje SMB persistente (`swarm-smb-mount`) | ✅ usa Keychain y launchd | CIFS mediante fstab montable por el usuario; timer systemd de usuario cada 300 s |
+| Actualización diaria (`swarm-update`) | ✅ usa launchd | Timer systemd de usuario |
 
 ## 🧱 Piezas
 
@@ -112,7 +112,7 @@ cp config/hosts.example.json config/hosts.json
 
 ### 2. Incorpora cada nodo
 
-Desde un nodo ya registrado:
+Desde un nodo macOS o Linux/WSL ya registrado, usa el mismo comando para ambas plataformas de destino:
 
 ```sh
 automation/agent-swarm/bin/swarm-setup add-host \
@@ -120,7 +120,15 @@ automation/agent-swarm/bin/swarm-setup add-host \
   --install-missing --no-auto-update
 ```
 
-Quita `--no-auto-update` si quieres la actualización diaria. Un nodo configurado antes de esa fase no tiene actualizador: ejecuta `automation/agent-swarm/bin/swarm-update install` en él. Herdr se actualiza pero su servidor nunca se reinicia; la ejecución sólo informa `server restart pending` en la salida de `swarm-update` y en `~/Library/Logs/mac-agent-swarm/swarm-update.log`, así que reinícialo tú cuando convenga. Si el comando se detiene esperando una acción, hazla y **vuelve a ejecutar el mismo comando**: continúa desde la fase pendiente.
+Quita `--no-auto-update` para activar la actualización diaria (04:30 por defecto) en ambas plataformas. Un nodo configurado antes de esa fase no tiene actualizador: ejecuta `automation/agent-swarm/bin/swarm-update install` en él. Herdr se actualiza pero su servidor nunca se reinicia; la ejecución sólo informa `server restart pending` en la salida de `swarm-update` y en su log, así que reinícialo tú cuando convenga. Si el comando se detiene esperando una acción, hazla y **vuelve a ejecutar el mismo comando**: continúa desde la fase pendiente.
+
+Para **Linux/WSL**, prepara SSH, Node, Python 3 y Pi, deja disponible el servidor Herdr y completa el login de Pi localmente. `--install-missing` puede instalar Herdr mediante el instalador oficial de https://herdr.dev/install.sh (descargado a un archivo temporal y ejecutado solo si la descarga tuvo éxito; requiere curl), y gentle-pi mediante Pi. No se requiere Homebrew.
+
+Para un spoke Linux, una persona debe añadir como root la entrada CIFS montable por el usuario a `/etc/fstab`, crear `/mnt/<share>` y crear `~/.config/agent-swarm/smb-credentials` con modo `0600`. `swarm-smb-mount fstab-line --host H --share S --user U` imprime la línea exacta y la plantilla de credenciales; la herramienta nunca usa sudo ni maneja contraseñas. Después, el setup monta el catálogo e instala un timer de persistencia; si `systemctl --user` no está disponible, el montaje se completa, se omite la persistencia y el setup imprime una advertencia. macOS conserva `/Volumes/<share>` y Keychain. Consulta [la preparación Linux/WSL](docs/es/setup/add-host.md#linuxwsl-preparación).
+
+En WSL, activa systemd con `[boot]` / `systemd=true` en `/etc/wsl.conf`. Los timers de usuario requieren una sesión del usuario salvo que se active `loginctl enable-linger $USER`. Un hub Linux debe publicar su catálogo con su propio servidor SMB (por ejemplo Samba); el setup no lo configura.
+
+Ambas plataformas ejecutan estas diez fases:
 
 ```mermaid
 flowchart TD
@@ -220,7 +228,7 @@ Si recibes `unknown`, vuelve a consultar con `recover` y el mismo UUID. Si no ca
 ## 🔐 Seguridad
 
 - **SSH:** un alias `swarm-<nodo>` y una clave dedicada por sentido, con `StrictHostKeyChecking` activo y sin reenvío de agente ni de puertos.
-- **SMB:** sólo se comparte el catálogo aprobado, y las credenciales se guardan en el almacén local del nodo que lo monta.
+- **SMB:** sólo se comparte el catálogo aprobado. macOS usa el Keychain del nodo que lo monta; Linux/WSL usa acceso fstab preparado por la persona y un archivo de credenciales protegido, nunca contraseñas entregadas a la herramienta.
 - **Agentes:** las sesiones y credenciales de Pi y Herdr nunca salen del nodo que los ejecuta.
 - **Limpieza:** cada nodo sólo cierra las pestañas y sesiones que él mismo creó.
 - **Escritura concurrente:** no se coordina de forma automática. Si dos tareas tocan el mismo proyecto, la revisión es humana.
@@ -248,9 +256,7 @@ Lo que todavía no está hecho y hacia dónde va el proyecto:
 - [ ] **Reparto automático por carga.** Si la CPU o la RAM de la máquina local superan un umbral configurable (por ejemplo, 85%), delegar la tarea en el nodo menos cargado que pase `preflight`. Empezará como una opción explícita (`target: auto`), no como comportamiento por defecto, porque dos tareas automáticas podrían escribir en el mismo proyecto. Seguimiento en la [issue #1](https://github.com/LeonardoX77/agent-swarm/issues/1).
 - [ ] **Métricas de carga por nodo.** Exponer CPU y memoria de cada nodo con herramientas estándar de Unix (`uptime`, `/proc/meminfo` en Linux, `vm_stat` en macOS) para que el reparto automático pueda decidir.
 - [ ] **Servidor MCP.** Publicar `list_nodes`, `check_node`, `submit_task`, `get_task`, `close_task` y `node_load` como herramientas MCP. Será un servidor local por stdio que envuelve `swarm-delegate`, mantiene SSH como transporte, no bloquea en tareas largas, nunca reintenta en automático y pide aprobación humana para `submit_task`.
-- [ ] **Probar en Linux.** La delegación de tareas está pensada para ser portable, pero sólo se ha validado en macOS.
-- [ ] **Quitar la dependencia de macOS.** `swarm-smb-mount` y `swarm-update` usan launchd, Keychain y `osascript`, que sólo existen en macOS. Faltan alternativas para Linux, por ejemplo `mount.cifs` con un archivo de credenciales protegido y un timer de systemd.
-- [ ] **Alta automática en Linux.** `swarm-setup` aún asume las rutas y servicios de macOS.
+- [ ] **Validar la delegación Linux de extremo a extremo.** Las pruebas reales en WSL cubren SMB y los servicios de actualización, no un alta completa entre dos máquinas ni la delegación de tareas. Consulta [la evidencia y sus límites](docs/es/runbooks/agent-swarm/test-evidence.md#evidencia-linuxwsl).
 - [ ] **Posible carrera al arrancar Pi.** En una prueba real, la aceptación devolvió `unknown` porque la sesión de Pi se evaluó antes de estar lista; repetirla funcionó. Falta una prueba determinista que lo reproduzca antes de corregir el adaptador. Los detalles están en la [evidencia de pruebas](docs/es/runbooks/agent-swarm/test-evidence.md).
 
 ## 🤝 Colaborar

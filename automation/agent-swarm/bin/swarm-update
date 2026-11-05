@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check and update Agent Swarm host tools without sudo (macOS only)."""
+"""Check and update Agent Swarm host tools without sudo (macOS and Linux).
+
+Install schedules with launchd on macOS or a systemd user timer on Linux.
+Linux herdr uses `herdr update`; mosh is managed by the system package manager.
+"""
 import argparse
 import fcntl
 import json
@@ -33,6 +37,7 @@ class SwarmUpdate:
         # Explicit `brew update` remains available to run and check --refresh.
         self.environ.setdefault("HOMEBREW_NO_AUTO_UPDATE", "1")
         self.verbose = verbose
+        self.linux = sys.platform.startswith("linux")
         self.commands = []
 
     @staticmethod
@@ -78,6 +83,7 @@ class SwarmUpdate:
         if nvm_bin is not None: add(nvm_bin)
         add(self.home / ".hermes/node/bin")
         add(self.home / ".local/bin")
+        add(self.home / ".pi/agent/bin")
         return ":".join(paths + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
 
     def use_tool_path(self, config=None):
@@ -87,7 +93,39 @@ class SwarmUpdate:
             except ToolError: pass
         self.environ["PATH"] = config["path"] if config is not None else self.discover_path()
         return self.environ["PATH"]
-    def log_path(self): return self.home / "Library/Logs/mac-agent-swarm/swarm-update.log"
+    def log_path(self):
+        if self.linux: return self.home / ".local/state/agent-swarm/logs/swarm-update.log"
+        return self.home / "Library/Logs/mac-agent-swarm/swarm-update.log"
+    def unit_path(self, kind):
+        return self.home / (".config/systemd/user/agent-swarm-update." + kind)
+
+    def systemctl(self, *args, error=None):
+        result = self._run(["systemctl", "--user", *args])
+        if error and result.returncode:
+            detail = (result.stderr or result.stdout).strip() or "command failed"
+            raise ToolError(error + ": " + detail)
+        return result
+
+    @staticmethod
+    def systemd_quote(value, command=False):
+        # Unit specifiers apply even inside quotes; ExecStart also expands dollars.
+        value = value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+        if command: value = value.replace("$", "$$")
+        return '"' + value + '"'
+
+    def install_systemd(self, hour, minute, path):
+        service = ("[Unit]\nDescription=Agent Swarm updates\n\n[Service]\nType=oneshot\n"
+                   "ExecStart=/usr/bin/env python3 " + self.systemd_quote(str(self.local_script_path()), command=True) + " run\n"
+                   "Environment=" + self.systemd_quote("PATH=" + path) + "\n")
+        timer = ("[Unit]\nDescription=Schedule Agent Swarm updates\n\n[Timer]\n"
+                 f"OnCalendar=*-*-* {hour:02d}:{minute:02d}:00\nPersistent=true\n\n"
+                 "[Install]\nWantedBy=timers.target\n")
+        self.atomic_write(self.unit_path("service"), service.encode())
+        self.atomic_write(self.unit_path("timer"), timer.encode())
+        self.systemctl("daemon-reload", error="Could not reload systemd user units")
+        self.systemctl("enable", "--now", "agent-swarm-update.timer", error="Could not enable systemd update timer")
+        # Preserve the install response keys used by existing callers.
+        return {"installed": True, "plist": str(self.unit_path("service"))}
     def plist_path(self): return self.home / "Library/LaunchAgents/com.mac-agent-swarm.update.plist"
     def local_script_path(self): return self.home / ".local/agent-swarm/bin/swarm-update"
 
@@ -124,7 +162,7 @@ class SwarmUpdate:
     def check(self, names, refresh=False):
         # check is deliberately read-only; refresh is reserved for callers wanting brew metadata.
         self.use_tool_path()
-        if refresh and any(name in ("herdr", "mosh", "moshi-hook", "gentle-ai") for name in names): self._run(["brew", "update"], 1200)
+        if not self.linux and refresh and any(name in ("herdr", "mosh", "moshi-hook", "gentle-ai") for name in names): self._run(["brew", "update"], 1200)
         return [self.component(name).check() for name in names]
 
     def run_update(self, force=False):
@@ -137,7 +175,7 @@ class SwarmUpdate:
             return {"exit_code": 0, "throttled": True, "components": [], "message": "Last successful run was less than 20 hours ago"}
         names = config["components"]
         self.use_tool_path(config)
-        if any(name in ("herdr", "mosh", "moshi-hook", "gentle-ai") for name in names): self._run(["brew", "update"], 1200)
+        if not self.linux and any(name in ("herdr", "mosh", "moshi-hook", "gentle-ai") for name in names): self._run(["brew", "update"], 1200)
         results = []
         failed = False
         for name in names:
@@ -155,11 +193,14 @@ class SwarmUpdate:
         path = self.discover_path() if path is None else path
         config = {"enabled": True, "hour": hour, "minute": minute, "components": components, "path": path}
         self.use_tool_path(config)
+        if self.linux:
+            self.systemctl("show-environment", error="systemctl --user is unavailable")
         # Validate before writing anything.
         self.atomic_write(self.config_path(), (json.dumps(config) + "\n").encode())
         self.read_config()
         self.local_script_path().parent.mkdir(parents=True, exist_ok=True)
         self.atomic_write(self.local_script_path(), Path(__file__).read_bytes(), 0o755)
+        if self.linux: return self.install_systemd(hour, minute, path)
         data = {"Label": "com.mac-agent-swarm.update", "ProgramArguments": ["/usr/bin/python3", str(self.local_script_path()), "run"],
                 "RunAtLoad": False, "StartCalendarInterval": {"Hour": hour, "Minute": minute},
                 "EnvironmentVariables": {"PATH": path}, "StandardOutPath": str(self.log_path()), "StandardErrorPath": str(self.log_path())}
@@ -172,6 +213,12 @@ class SwarmUpdate:
 
     def uninstall(self):
         self.use_tool_path()
+        if self.linux:
+            self.systemctl("disable", "--now", "agent-swarm-update.timer", error="Could not disable systemd update timer")
+            for kind in ("timer", "service"):
+                if self.unit_path(kind).exists(): self.unit_path(kind).unlink()
+            self.systemctl("daemon-reload", error="Could not reload systemd user units")
+            return {"uninstalled": True}
         self._run(["/bin/launchctl", "bootout", "gui/%s/com.mac-agent-swarm.update" % self.uid])
         if self.plist_path().exists(): self.plist_path().unlink()
         return {"uninstalled": True}
@@ -179,7 +226,12 @@ class SwarmUpdate:
     def status(self):
         config = self.read_config()
         self.use_tool_path(config)
-        loaded = self._run(["/bin/launchctl", "print", "gui/%s/com.mac-agent-swarm.update" % self.uid]).returncode == 0
+        if self.linux:
+            enabled = self.systemctl("is-enabled", "agent-swarm-update.timer").returncode == 0
+            active = self.systemctl("is-active", "agent-swarm-update.timer").returncode == 0
+            loaded = enabled or active
+        else:
+            loaded = self._run(["/bin/launchctl", "print", "gui/%s/com.mac-agent-swarm.update" % self.uid]).returncode == 0
         try: stamp = json.loads(self.stamp_path().read_text())
         except (OSError, ValueError): stamp = None
         return {"config": config, "loaded": loaded, "last_run": stamp}
@@ -188,11 +240,20 @@ class Component:
     def __init__(self, tool, name): self.tool, self.name = tool, name
     def _brew_name(self): return self.name
     def source(self):
+        if self.tool.linux and self.name == "moshi-hook": return "standalone"
         if self.name == "moshi-hook":
             if self.tool._run(["brew", "list", "--versions", "moshi-hook"]).returncode == 0: return "brew"
             return "standalone"
         return "brew" if self.name in ("herdr", "mosh", "gentle-ai") else "pi"
     def check(self):
+        if self.tool.linux and self.name == "gentle-ai":
+            return {"name": self.name, "status": "skipped", "reason": "Homebrew is not used on Linux"}
+        if self.tool.linux and self.name == "mosh":
+            return {"name": self.name, "status": "skipped", "reason": "managed by the system package manager"}
+        if self.tool.linux and self.name == "herdr":
+            probe = self.tool._run(["herdr", "--version"])
+            if probe.returncode: return {"name": self.name, "status": "skipped", "reason": "not installed"}
+            return {"name": self.name, "status": "installed", "current": probe.stdout.strip() or "unknown", "outdated": True, "source": "standalone"}
         if self.name in ("herdr", "mosh", "gentle-ai"):
             listed = self.tool._run(["brew", "list", "--versions", self.name])
             if listed.returncode: return {"name": self.name, "status": "skipped", "reason": "not installed"}
@@ -217,7 +278,11 @@ class Component:
         available = item.get("current_version") if item else current
         return {"name": self.name, "status": "installed", "current": current, "available": available, "outdated": bool(item), "source": "brew"}
     def update(self):
-        if self.name in ("herdr", "mosh", "gentle-ai") or (self.name == "moshi-hook" and self.source() == "brew"):
+        if self.tool.linux and self.name in ("mosh", "gentle-ai"):
+            return self.check()
+        if self.tool.linux and self.name == "herdr":
+            result = self.tool._run(["herdr", "update"], 1200)
+        elif self.name in ("herdr", "mosh", "gentle-ai") or (self.name == "moshi-hook" and self.source() == "brew"):
             result = self.tool._run(["brew", "upgrade", self.name], 1200)
         elif self.name == "moshi-hook":
             binary = "moshi-hook" if self.tool._run(["moshi-hook", "--version"]).returncode == 0 else str(self.tool.home / ".local/bin/moshi-hook")
