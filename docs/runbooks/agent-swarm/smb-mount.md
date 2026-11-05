@@ -1,19 +1,19 @@
-# Montaje SMB entre equipos
+# SMB mounting between machines
 
-`swarm-smb-mount` consulta, monta y desmonta **un recurso SMB concreto** de otro Mac. Usa las credenciales guardadas en el llavero de macOS: no admite, guarda ni muestra contraseñas. Durante el alta, `swarm-setup` toma `share.host`, `share.name` y `share.user` de `config/hosts.json`; no copie valores de otro equipo.
+`swarm-smb-mount` queries, mounts, and unmounts **one specific SMB share** from another Mac. It uses credentials stored in the macOS Keychain: it does not accept, store, or display passwords. During onboarding, `swarm-setup` takes `share.host`, `share.name`, and `share.user` from `config/hosts.json`; do not copy values from another machine.
 
-## Preparación inicial
+## Initial preparation
 
-En la sesión gráfica del Mac que realizará el montaje:
+In the graphical session of the Mac that will mount the share:
 
-1. Consulte `share.host`, `share.name` y `share.user` en `config/hosts.json`. Confirme que el recurso publica únicamente el catálogo autorizado, no un disco o directorio más amplio.
-2. En Finder, elija **Ir > Conectarse al servidor** y use `smb://<share.user>@<share.host>/<share.name>`, sustituyendo los tres marcadores por esos valores.
-3. Autentíquese allí y marque **«Recordar contraseña en el llavero»**. No transmita la contraseña al agente ni la incluya en comandos, archivos o logs.
-4. Confirme que el catálogo aparece en `/Volumes/<share.name>`. Si quiere probar un montaje nuevo desde el script, desmonte primero el recurso desde Finder.
+1. Read `share.host`, `share.name`, and `share.user` in `config/hosts.json`. Confirm the share publishes only the approved catalog, not a larger disk or directory.
+2. In Finder select **Go > Connect to Server** and use `smb://<share.user>@<share.host>/<share.name>`, replacing all three placeholders with those values.
+3. Authenticate there and select **“Remember this password in my keychain.”** Never send the password to the agent or include it in commands, files, or logs.
+4. Confirm the catalog appears at `/Volumes/<share.name>`. To test a new script mount, unmount the share in Finder first.
 
-## Uso
+## Use
 
-Sustituya los marcadores con valores de `config/hosts.json` antes de ejecutar los comandos desde el repositorio:
+Replace placeholders with `config/hosts.json` values before running from the repository:
 
 ```bash
 automation/agent-swarm/bin/swarm-smb-mount status --host <share.host> --share <share.name> --user <share.user>
@@ -21,34 +21,34 @@ automation/agent-swarm/bin/swarm-smb-mount mount --host <share.host> --share <sh
 automation/agent-swarm/bin/swarm-smb-mount unmount --host <share.host> --share <share.name> --user <share.user>
 ```
 
-La salida es JSON. `mount` es idempotente: si ya existe exactamente `//<share.user>@<share.host>/<share.name>`, informa el punto ya montado. `unmount` sólo actúa sobre ese origen exacto; no desmonta otros recursos SMB. Si macOS elige `/Volumes/<share.name>-1` en vez del punto esperado, la salida incluye `unexpected_mount_point`: compruebe qué ocupa el punto original antes de actuar.
+Output is JSON. `mount` is idempotent: when exactly `//<share.user>@<share.host>/<share.name>` already exists, it reports the existing mount point. `unmount` acts only on that exact origin; it does not unmount other SMB shares. If macOS selects `/Volumes/<share.name>-1` instead, output includes `unexpected_mount_point`: inspect what occupies the original point before acting.
 
-## Montaje persistente
+## Persistent mount
 
-`swarm-setup` instala el montaje persistente durante el alta de un `spoke`. Para instalarlo manualmente, añada `--persistent` al primer montaje:
+`swarm-setup` installs persistent mounting when onboarding a `spoke`. To install it manually, add `--persistent` to the first mount:
 
 ```bash
 automation/agent-swarm/bin/swarm-smb-mount mount \
   --host <share.host> --share <share.name> --user <share.user> --persistent
 ```
 
-Esto instala un LaunchAgent de usuario que intenta montar al iniciar sesión y cada 300 segundos. No conserva una contraseña: usa el llavero de la sesión gráfica. Para funcionar aunque el recurso aún no esté montado, el script se copia a `~/.local/agent-swarm/bin/swarm-smb-mount`.
+This installs a user LaunchAgent that tries to mount at login and every 300 seconds. It stores no password; it uses the graphical-session Keychain. To work before the share is mounted, the script is copied to `~/.local/agent-swarm/bin/swarm-smb-mount`.
 
-Los artefactos son:
+Artifacts:
 
-- LaunchAgent: `~/Library/LaunchAgents/com.mac-agent-swarm.smb.<identificador-del-recurso>.plist` (compruebe el nombre real en el host).
-- Copia local: `~/.local/agent-swarm/bin/swarm-smb-mount`.
-- Registros: `~/Library/Logs/mac-agent-swarm/`.
+- LaunchAgent: `~/Library/LaunchAgents/com.mac-agent-swarm.smb.<share-identifier>.plist` (check its real name on the host).
+- Local copy: `~/.local/agent-swarm/bin/swarm-smb-mount`.
+- Logs: `~/Library/Logs/mac-agent-swarm/`.
 
-Para retirar el montaje y su LaunchAgent, sin borrar la copia local ni los registros:
+To remove the mount and LaunchAgent without deleting the local copy or logs:
 
 ```bash
 automation/agent-swarm/bin/swarm-smb-mount unmount \
   --host <share.host> --share <share.name> --user <share.user> --remove-persistent
 ```
 
-## Ejecución por SSH
+## SSH operation
 
-`osascript` necesita una sesión gráfica de macOS: un montaje iniciado sólo por SSH normalmente no puede mostrar la interacción. Con `--persistent`, el script instala y usa el LaunchAgent en la sesión gráfica, lo activa y espera el resultado; la salida indica `"via": "launchagent"`.
+`osascript` needs a macOS graphical session: a mount started only through SSH normally cannot display interaction. With `--persistent`, the script installs and uses the LaunchAgent in the graphical session, activates it, and waits for the result; output reports `"via": "launchagent"`.
 
-Si el alta se detiene en `mount`, conecte primero desde Finder y guarde la contraseña en Keychain; reanude **el mismo comando** de `swarm-setup`. Si la primera copia por SCP informa que falta el directorio de destino, use una versión de `swarm-setup` que cree el padre remoto antes de copiar; no reubique manualmente los archivos fuera del directorio previsto.
+If onboarding stops at `mount`, connect first in Finder and save the password in Keychain; resume **the same `swarm-setup` command**. If the initial SCP copy reports that the destination directory is missing, use a `swarm-setup` version that creates the remote parent before copying; do not manually relocate files outside the intended directory.

@@ -1,48 +1,48 @@
-# Evidencia histórica de pruebas de Agent Swarm
+# Historical Agent Swarm test evidence
 
-> **Estado:** registro histórico, no protocolo de producción ni aceptación de un despliegue. La comprobación vigente está en [validación](validation.md).
+> **Status:** historical record, not a production protocol or deployment acceptance. Current checks are in [validation](validation.md).
 
-## Cómo interpretar la evidencia
+## Interpreting the evidence
 
-- **PASS** confirma únicamente la observación descrita en el entorno y momento anotados.
-- **FAIL**, **BLOCKED**, **SKIP** e **INCONCLUSIVE** no deben reinterpretarse como una capacidad disponible.
-- Los nombres de tabs, panes, PIDs, nonces y rutas temporales son identificadores históricos, no valores reutilizables.
-- Las observaciones no sustituyen el registro actual, una huella verificada, login de Pi, un montaje SMB ni una aceptación del canal.
+- **PASS** confirms only the observation described at the recorded time and environment.
+- **FAIL**, **BLOCKED**, **SKIP**, and **INCONCLUSIVE** must not be reinterpreted as an available capability.
+- Tab names, panes, PIDs, nonces, and temporary paths are historical identifiers, not reusable values.
+- Observations do not replace the current registry, a verified fingerprint, Pi login, an SMB mount, or channel acceptance.
 
-## Observaciones útiles de Herdr + Pi
+## Useful Herdr + Pi observations
 
-| Área | Observación histórica | Límite |
+| Area | Historical observation | Limit |
 | --- | --- | --- |
-| Sesión propia | Una tab y un agente Pi propios pudieron responder un nonce y limpiarse sin cerrar recursos preexistentes. | No demuestra aislamiento completo ni garantía de producción. |
-| Arranque de Pi | En una aceptación real, Herdr devolvió un agente idle justo después de `agent start`; el adaptador dejó el ledger en `start_intent` y la aceptación quedó `unknown`. Repetir el mismo setup pasó. | Evidencia de una posible carrera de arranque, no causa confirmada ni corregida. Añadir una prueba determinista con un agente que tarde en estar listo y comprobar que la aceptación no se declara fallida ni se reenvía el prompt a ciegas. |
-| Resultado JSONL | El adaptador encontró el mensaje exacto de usuario y una respuesta final descendiente en el JSONL de la sesión propia. | Los snapshots de pantalla no correlacionan por sí mismos un turno. |
-| Ledger | Persistir intención antes de crear, iniciar, enviar y cerrar permitió conservar estados ambiguos para recuperación. | No aporta exactly-once distribuido ni autoriza reenvío automático. |
-| Envelope | El contrato correcto contiene seis campos y `mode: executor`; entradas extra o modos no admitidos se rechazan. | La validación no sustituye el control humano del alcance. |
-| Cierre | Un cierre verificado conserva el resultado y confirma `tab_not_found` para la tab propia. | No autoriza cerrar tabs, agentes o sesiones ajenos. |
-| Límites JSONL | Se observó una línea de sistema cercana a 99 KiB; el lector admite hasta 1 MiB por línea y 8 MiB por archivo. | Son límites del adaptador, no una promesa sobre futuros formatos de Pi. |
+| Own session | A dedicated tab and Pi agent responded to a nonce and were cleaned up without closing pre-existing resources. | Does not prove complete isolation or production guarantees. |
+| Pi startup | In real acceptance, Herdr returned an idle agent immediately after `agent start`; the adapter kept the ledger at `start_intent` and acceptance became `unknown`. Repeating the same setup passed. | Evidence of a possible startup race, not a confirmed or fixed cause. Add a deterministic delayed-ready-agent test and verify acceptance is not declared failed or blindly resent. |
+| JSONL result | The adapter found the exact user message and a descendant final response in its own session JSONL. | Screen snapshots alone do not correlate a turn. |
+| Ledger | Persisting intent before create, start, submit, and close retained ambiguous states for recovery. | It provides neither distributed exactly-once nor automatic resend authorization. |
+| Envelope | The valid contract has six fields and `mode: executor`; extra fields or unsupported modes are rejected. | Validation does not replace human scope control. |
+| Close | A verified close preserves the result and confirms `tab_not_found` for its own tab. | It does not authorize closing others' tabs, agents, or sessions. |
+| JSONL limits | A system line near 99 KiB was observed; the reader accepts up to 1 MiB per line and 8 MiB per file. | These are adapter limits, not a promise about future Pi formats. |
 
-## Comunicación y recuperación
+## Communication and recovery
 
-Las pruebas históricas mostraron que una desconexión controlada del cliente SSH o un timeout de espera no prueban la cancelación del trabajo remoto. La recuperación segura conserva el UUID y consulta el estado; no crea un segundo trabajo ni reenvía un prompt ante ambigüedad.
+Historical tests showed that a controlled SSH-client disconnect or wait timeout does not prove cancellation of remote work. Safe recovery retains the UUID and queries status; it neither creates a second job nor resends a prompt when state is ambiguous.
 
-También se observó que Herdr puede emitir errores tipados por stdout o stderr, y que `herdr agent prompt` rechaza `--timeout` sin `--wait`. El adaptador envía el prompt sin esas opciones y analiza ambos canales de error.
+Herdr can emit typed errors on stdout or stderr, and `herdr agent prompt` rejects `--timeout` without `--wait`. The adapter sends the prompt without those options and parses both error channels.
 
-## Límites que permanecen abiertos
+## Open boundaries
 
-1. Probar fallas generales de red y servidor con recuperación sin reenvío ciego.
-2. Verificar en cada despliegue el catálogo SMB limitado, aliases, huellas y ambas direcciones SSH.
-3. Mantener login y credenciales de Pi locales al host; una observación de GUI no demuestra autenticación no interactiva distinta.
-4. Coordinar escritores humanos: el canal no implementa locks ni resolución de conflictos.
-5. Reproducir y cubrir la posible carrera entre `herdr agent start` y la disponibilidad efectiva de Pi antes de modificar el adaptador; la prueba debe distinguir agente idle sin turno recibido de respuesta final válida y evitar reenvíos ciegos.
-6. Evaluar cualquier cambio de runtime o protocolo como trabajo nuevo, con evidencia nueva.
+1. Test general network and server failures with recovery without blind resend.
+2. Verify at every deployment the restricted SMB catalog, aliases, fingerprints, and both SSH directions.
+3. Keep Pi login and credentials local to the host; a GUI observation does not prove separate noninteractive authentication.
+4. Coordinate human writers: the channel implements neither locks nor conflict resolution.
+5. Reproduce and cover the possible race between `herdr agent start` and Pi's effective readiness before modifying the adapter; distinguish an idle agent with no received turn from a valid final answer and avoid blind resend.
+6. Treat every runtime or protocol change as new work requiring new evidence.
 
-## Evidencia local disponible
+## Available local evidence
 
-Las pruebas deterministas del adaptador se ejecutan con fixtures y no abren una GUI viva ni configuran hosts:
+Adapter deterministic tests use fixtures and do not open a live GUI or configure hosts:
 
 ```sh
 python3 -m unittest automation/agent-swarm/test/test_herdr_task.py
 python3 -m unittest discover -s automation/agent-swarm/test
 ```
 
-Antes de operar, siga [validación](validation.md), [Canal SSH](ssh-channel.md) y [Montaje SMB](smb-mount.md). Para el contrato de tareas, consulte [Tareas Herdr + Pi](herdr-tasks.md).
+Before operating, follow [validation](validation.md), [SSH channel](ssh-channel.md), and [SMB mount](smb-mount.md). For the task contract, see [Herdr + Pi tasks](herdr-tasks.md).

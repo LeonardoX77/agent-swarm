@@ -1,69 +1,69 @@
-# Arquitectura de Agent Swarm
+# Agent Swarm architecture
 
-Agent Swarm delega una tarea Pi entre Macs registrados. El origen transporta un sobre por SSH hacia el destino; allí `swarm-herdr-task` crea una tab y una sesión Pi propias en Herdr, y obtiene el resultado desde el JSONL de esa sesión. Es coordinación de transporte y ciclo de vida, no un modelo ni un sandbox.
+Agent Swarm delegates a Pi task between registered Macs. The origin sends an envelope over SSH; at the destination, `swarm-herdr-task` creates its own Herdr tab and Pi session and obtains the result from that session's JSONL. It coordinates transport and lifecycle; it is not a model or sandbox.
 
-## Resultado y alcance
+## Outcome and scope
 
-El canal vigente permite que un host registrado solicite una tarea en otro host registrado mediante `swarm-delegate`. Cada tarea usa un UUID, un proyecto relativo al catálogo del destino y un sobre con objetivo y criterios de aceptación. El destino ejecuta Pi mediante Herdr bajo su propia cuenta local.
+A registered host can request work from another registered host through `swarm-delegate`. Every task uses a UUID, a project relative to the destination catalog, and an envelope with a goal and acceptance criteria. The destination runs Pi under its own local account through Herdr.
 
-Quedan fuera del contrato: copiar credenciales, automatizar logins, acceso SSH sin validar huella, configuración remota sin presencia humana, garantía distribuida de exactamente una vez y arbitraje de escritores concurrentes.
+The contract excludes copying credentials, automated logins, SSH access without a verified fingerprint, remote configuration without a human present, distributed exactly-once guarantees, and concurrent-writer arbitration.
 
-## Topología
+## Topology
 
-| Elemento | Responsabilidad |
+| Element | Responsibility |
 | --- | --- |
-| Hub | Define el catálogo que publica SMB y figura como `hub` en el registro. |
-| Spoke | Usa el catálogo montado en `/Volumes/<share.name>` cuando requiere el proyecto compartido. |
-| Registro | `config/hosts.json` (local, ignorado por Git; plantilla en `config/hosts.example.json`) fija el share y, por host, prefijo de hostname, rol, alias SSH, dirección, catálogo, checkout, PATH, cwd GUI y runtimes. |
-| SSH | Conecta un alias `swarm-<destino>` por dirección. La persona verifica huellas; las claves dedicadas deshabilitan reenvíos pero no convierten SSH en sandbox. |
-| SMB | Transporta sólo el catálogo aprobado; las credenciales se mantienen en Keychain del Mac que monta. |
-| Herdr + Pi | El destino crea y controla exclusivamente recursos propios: una tab, un agente Pi y una sesión privada por tarea. |
-| Skill | `agent-swarm-remote` define cómo validar, delegar, recuperar y cerrar sobres de tarea. |
+| Hub | Defines the SMB-published catalog and is the registry's `hub`. |
+| Spoke | Uses the catalog mounted at `/Volumes/<share.name>` when it needs the shared project. |
+| Registry | `config/hosts.json` (local, Git-ignored; template: `config/hosts.example.json`) defines the share and each host's hostname prefix, role, SSH alias, address, catalog, checkout, PATH, GUI cwd, and runtimes. |
+| SSH | Connects a `swarm-<target>` alias in each direction. A person verifies fingerprints; dedicated keys disable forwarding but do not make SSH a sandbox. |
+| SMB | Carries only the approved catalog; credentials stay in the Keychain of the mounting Mac. |
+| Herdr + Pi | The destination creates and controls only its own resources: one tab, Pi agent, and private session per task. |
+| Skill | `agent-swarm-remote` defines how to validate, delegate, recover, and close task envelopes. |
 
-Los nombres, rutas y endpoints se consultan siempre en el registro. Un mismo nombre de usuario en dos hosts no comparte `HOME`, Keychain, tokens, configuración, sesiones ni cachés.
+Names, paths, and endpoints always come from the registry. The same user name on two hosts does not share `HOME`, Keychain, tokens, configuration, sessions, or caches.
 
-## Flujo de una tarea
+## Task flow
 
-1. El origen consulta `swarm-delegate list` y confirma el destino registrado; `self` identifica el host local.
-2. `preflight <destino>` comprueba SSH y el catálogo. Si un spoke informa `catalog_missing`, se resuelve su montaje SMB antes de enviar trabajo.
-3. El origen envía por stdin un sobre con exactamente `task_id`, `origin_host`, `project`, `goal`, `acceptance` y `mode: executor`.
-4. `swarm-delegate` usa SSH en modo batch y ejecuta `swarm-herdr-task submit` en el checkout declarado por el destino.
-5. El adaptador reserva el UUID en un ledger durable, crea una sesión privada, crea una tab Herdr sin foco e inicia Pi con argv cerrado.
-6. El adaptador envía el sobre exacto a Pi y `recover` lee solamente el JSONL de la sesión propia hasta encontrar la respuesta final.
-7. Tras un resultado verificable, `close` cierra únicamente la tab de esa tarea. Si el estado es ambiguo, se conserva para recuperación; no se reenvía el prompt.
+1. The origin runs `swarm-delegate list` and confirms the registered destination; `self` identifies the local host.
+2. `preflight <target>` checks SSH and the catalog. If a spoke reports `catalog_missing`, mount its SMB catalog before sending work.
+3. The origin sends an envelope on stdin containing exactly `task_id`, `origin_host`, `project`, `goal`, `acceptance`, and `mode: executor`.
+4. `swarm-delegate` uses batch-mode SSH to run `swarm-herdr-task submit` in the checkout declared by the destination.
+5. The adapter reserves the UUID in a durable ledger, creates a private session and unfocused Herdr tab, then starts Pi with closed argv.
+6. The adapter sends Pi the exact envelope; `recover` reads only its own session JSONL until it finds the final answer.
+7. After a verifiable result, `close` closes only that task's tab. Ambiguous states are retained for recovery; the prompt is not resent.
 
-## Contrato de tarea
+## Task contract
 
-| Campo | Regla |
+| Field | Rule |
 | --- | --- |
-| `task_id` | UUID nuevo por trabajo. Ante ambigüedad se conserva y se reutiliza el mismo sobre. |
-| `origin_host` | Nombre de host registrado que inició la tarea. |
-| `project` | Ruta relativa bajo `catalog_root` del destino; nunca una ruta absoluta. |
-| `goal` y `acceptance` | Texto no vacío y autocontenido que acota el trabajo y su resultado. |
-| `mode` | Exactamente `executor`. |
+| `task_id` | A new UUID per job. On ambiguity, retain and reuse the same envelope. |
+| `origin_host` | Registered host name that started the task. |
+| `project` | Path relative to the destination's `catalog_root`; never absolute. |
+| `goal` and `acceptance` | Non-empty, self-contained text that bounds the work and result. |
+| `mode` | Exactly `executor`. |
 
-`submit` acepta el sobre sólo por stdin. `recover` y `close` reciben el UUID. Los errores de conexión dejan el estado desconocido desde el origen: la acción segura es recuperar más tarde, no suponer que la tarea no se inició.
+`submit` accepts the envelope only through stdin. `recover` and `close` take the UUID. Connection errors make state unknown from the origin; recover later rather than assuming the task never started.
 
-## Ciclo de alta
+## Onboarding lifecycle
 
-`swarm-setup add-host` coordina una alta reanudable desde un host ya registrado. Sus fases validan el origen, esperan Remote Login, verifican huellas y claves en ambas direcciones, comprueban runtimes, realizan el montaje SMB del spoke, actualizan el registro, instalan la skill, configuran actualización local y ejecutan aceptación Herdr + Pi.
+`swarm-setup add-host` coordinates resumable onboarding from a registered host. Its phases validate the origin, wait for Remote Login, verify fingerprints and keys in both directions, check runtimes, mount the spoke SMB catalog, update the registry, install the skill, configure local updates, and run Herdr + Pi acceptance.
 
-Las pausas de Remote Login, huella, login de Pi y primer montaje SMB son decisiones humanas locales. Repetir el mismo comando conserva el estado y reanuda la fase pendiente; no se sustituyen valores del registro por rutas o nombres inventados.
+Remote Login, fingerprint, Pi login, and first SMB-mount pauses are local human decisions. Re-running the same command retains state and resumes the pending phase; it never substitutes invented registry paths or names.
 
-## Límites operativos
+## Operational boundaries
 
-- `StrictHostKeyChecking` es obligatorio; no se aceptan huellas sin comparación fiable.
-- Los secretos no viajan en el sobre, el registro, los comandos ni los logs compartidos.
-- El ledger persiste intenciones antes de efectos remotos. Un timeout, salida no cero o respuesta no interpretable deja `unknown` y bloquea el reenvío automático.
-- El adaptador no usa el directorio de sesiones del usuario: cada tarea conserva su directorio privado y permisos restrictivos.
-- Dos tareas pueden competir por el mismo árbol de trabajo. La coordinación, revisión y resolución de conflictos son humanas.
-- La evidencia de pruebas no equivale a un despliegue. Consulte [validación](runbooks/agent-swarm/validation.md) antes de operar.
+- `StrictHostKeyChecking` is mandatory; do not accept fingerprints without a reliable comparison.
+- Secrets never travel in the envelope, registry, commands, or shared logs.
+- The ledger persists intent before remote effects. A timeout, nonzero exit, or unparseable response becomes `unknown` and prevents automatic resend.
+- The adapter does not use the user's session directory: every task keeps a private, restrictive-permission directory.
+- Two tasks can contend for one worktree. Coordination, review, and conflict resolution are human responsibilities.
+- Test evidence is not deployment acceptance. Read [validation](runbooks/agent-swarm/validation.md) before operating.
 
-## Checklist de revisión
+## Review checklist
 
-- [ ] El registro contiene exactamente los hosts y el share que se pretende usar.
-- [ ] Cada dirección SSH tiene alias, huella verificada y clave dedicada.
-- [ ] El catálogo SMB está limitado al recurso aprobado y disponible donde se necesita.
-- [ ] Pi, gentle-pi y Herdr están instalados y autenticados localmente en cada destino.
-- [ ] El sobre usa un UUID y un proyecto relativo; ante ambigüedad se recupera, no se reenvía.
-- [ ] Sólo se cierran recursos creados por la tarea identificada.
+- [ ] The registry lists exactly the intended hosts and share.
+- [ ] Every SSH direction has an alias, verified fingerprint, and dedicated key.
+- [ ] The SMB catalog is restricted to the approved share and available where needed.
+- [ ] Pi, gentle-pi, and Herdr are installed and authenticated locally at every destination.
+- [ ] The envelope uses a UUID and relative project; ambiguity is recovered, not resent.
+- [ ] Only resources created by the identified task are closed.

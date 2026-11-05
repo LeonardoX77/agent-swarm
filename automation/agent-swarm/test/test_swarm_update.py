@@ -89,6 +89,16 @@ class SwarmUpdateTests(unittest.TestCase):
         self.assertEqual(item["current"], "0.9.3")
         self.assertEqual(item["available"], "0.9.4")
 
+    def test_gentle_ai_is_a_brew_component(self):
+        payload = json.dumps({"formulae": [{"name": "gentle-ai", "installed_versions": ["4.0.0"], "current_version": "4.3.1"}]})
+        tool = self.tool({("brew", "list", "--versions", "gentle-ai"): (0, "gentle-ai 4.0.0\n", ""),
+                          ("brew", "outdated", "--json=v2", "gentle-ai"): (0, payload, "")})
+        self.assertIn("gentle-ai", self.mod.COMPONENTS)
+        item = tool.component("gentle-ai").check()
+        self.assertEqual((item["current"], item["available"], item["outdated"]), ("4.0.0", "4.3.1", True))
+        self.assertEqual(tool.component("gentle-ai").update()["status"], "updated")
+        self.assertIn(["brew", "upgrade", "gentle-ai"], tool.runner.calls)
+
     def test_moshi_brew_precedes_standalone(self):
         tool = self.tool({("brew", "list", "--versions", "moshi-hook"): (0, "moshi-hook 1.0\n", "")})
         self.assertEqual(tool.component("moshi-hook").source(), "brew")

@@ -1,17 +1,17 @@
-# Agregar un equipo al canal Agent Swarm
+# Add a Mac to the Agent Swarm channel
 
-El camino canónico para incorporar un Mac nuevo es ejecutar **un único comando** desde un Mac ya registrado. `swarm-setup` coordina las diez fases, se detiene sólo ante acciones humanas y conserva el estado para reanudar la misma operación.
+The canonical way to add a new Mac is to run **one command** from an already registered Mac. `swarm-setup` coordinates ten phases, pauses only for human actions, and preserves state so the same operation can resume.
 
-## Camino rápido
+## Quick path
 
-### Requisitos
+### Requirements
 
-- El Mac de origen ya está registrado en `config/hosts.json` y se ejecuta el comando desde su checkout del repositorio. Ese archivo es local y no se versiona: si no existe, copie `config/hosts.example.json` y sustituya los valores de ejemplo por los reales.
-- El Mac nuevo usa macOS y la persona puede sentarse delante de él para algunos pasos GUI.
-- **Pi y gentle-pi son obligatorios; Claude es opcional; Herdr es obligatorio.**
-- Hay conectividad LAN o Tailscale hacia `<host>.local` y se conoce la cuenta `<user>` del Mac nuevo.
+- The origin Mac is already registered in `config/hosts.json` and you run the command from its repository checkout. This file is local and unversioned: if absent, copy `config/hosts.example.json` and replace examples with real values.
+- The new Mac runs macOS and a person can sit in front of it for GUI steps.
+- **Pi and gentle-pi are required; Claude is optional; Herdr is required.**
+- LAN or Tailscale connectivity to `<host>.local` exists and the new Mac's `<user>` account is known.
 
-Desde el Mac registrado, ejecute:
+From the registered Mac, run:
 
 ```sh
 automation/agent-swarm/bin/swarm-setup add-host \
@@ -20,7 +20,7 @@ automation/agent-swarm/bin/swarm-setup add-host \
   [--update-time 04:30 | --no-auto-update] [--verbose]
 ```
 
-El valor predeterminado instala la actualización diaria a las `04:30`; use `--no-auto-update` si no quiere activar ese calendario. Esto no instala un chequeo de actualizaciones al primer uso remoto: es una funcionalidad distinta. Agent Swarm no gestiona ni garantiza los avisos de paquetes que pueda mostrar Pi al iniciarse. `--install-missing` aprovecha las herramientas ya instaladas y sólo intenta añadir Herdr y gentle-pi cuando sus CLI base están disponibles: no reinstala todo el Mac. El proceso muestra un resumen breve en inglés; por ejemplo:
+The default installs daily updates at `04:30`; use `--no-auto-update` to leave that schedule disabled. This does not install an update check on first remote use: that is separate functionality. Agent Swarm neither manages nor guarantees package notices Pi may show when it starts. `--install-missing` uses existing tools and attempts only Herdr and gentle-pi when their base CLIs are available; it does not reinstall the entire Mac. The process prints a brief English summary, for example:
 
 ```text
 [ 1/10] local-preflight OK       origin preflight passed
@@ -29,147 +29,147 @@ El valor predeterminado instala la actualización diaria a las `04:30`; use `--n
 Summary: setup complete; changed phases: ssh-to-new, registry, skill, auto-update
 ```
 
-Al completar con éxito termina con salida `0`. Revise la entrada que el setup añadió a `config/hosts.json`. Ese archivo está ignorado por Git: no se comitea; si necesita compartir su estructura, actualice `config/hosts.example.json` con valores genéricos. No copie manualmente valores de `share`: el script los lee del registro.
+On success it exits `0`. Review the entry setup added to `config/hosts.json`. That Git-ignored file is not committed; if its structure must be shared, update `config/hosts.example.json` with generic values. Do not copy `share` values by hand: the script reads them from the registry.
 
-> Si se interrumpe o espera a una persona, ejecute **el mismo comando con las mismas opciones** otra vez desde el origen. Comprueba de nuevo cada fase y conserva lo ya configurado; no genere otra huella ni acepte una distinta sin verificarla localmente.
+> If interrupted or waiting for a person, run **the same command with the same options** again from the origin. It rechecks every phase and preserves completed configuration; do not generate another fingerprint or accept a different one without local verification.
 
-## Las diez fases
+## The ten phases
 
-Los nombres de fase siguientes son los que imprime el programa exactamente.
+The following phase names are printed by the program exactly.
 
-| Fase | Qué hace el script | Quién actúa | Si se detiene, texto exacto que muestra |
+| Phase | What the script does | Who acts | Exact stop message |
 | --- | --- | --- | --- |
-| `local-preflight` | Valida nombre, dirección, herramientas SSH y que el origen sea el `self_host` del registro. | Agente | No espera a una persona. |
-| `remote-login` | Comprueba que el puerto SSH del Mac nuevo sea alcanzable. | Persona | `On <name>: System Settings > General > Sharing > Remote Login: ON for user <user>` |
-| `ssh-to-new` | Crea o reutiliza la clave origen→nuevo, verifica la huella, configura `known_hosts`, autoriza la clave y crea `swarm-<name>`. | Persona y agente | Huella en TTY: `Type the fingerprint shown on <name> (or yes): `; clave: `On <name> add the displayed public key to ~/.ssh/authorized_keys, then continue.` |
-| `runtimes` | Comprueba Homebrew, Node, Python, Herdr, Pi, gentle-pi y el servidor Herdr; con `--install-missing` intenta instalar sólo Herdr y gentle-pi cuando sus precondiciones ya existen. | Persona | `On <name>: install missing runtimes and log Pi in once from the GUI` |
-| `ssh-to-origin` | Configura el canal SSH inverso nuevo→origen, incluida la huella del origen y el alias remoto. | Agente | No espera a una persona. Un conflicto de huella o alias falla de forma segura. |
-| `mount` | En un `spoke`, copia la utilidad de montaje e instala el montaje SMB persistente usando `share` del registro. | Persona | `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password` |
-| `registry` | Descubre datos del nuevo host y escribe su entrada en `config/hosts.json`. | Agente | No espera a una persona. |
-| `skill` | Copia la skill `agent-swarm-remote` y su bloque bootstrap al Mac nuevo. | Agente | No espera a una persona. |
-| `auto-update` | Instala `swarm-update` y su LaunchAgent diario, salvo `--no-auto-update`. | Agente | No espera a una persona. |
-| `acceptance` | Ejecuta preflight en ambos sentidos y pruebas de aceptación Herdr + Pi. | Persona y agente | Si Pi no tiene sesión: `Log Pi in from the GUI on <target>` |
+| `local-preflight` | Validates name, address, SSH tools, and that the origin is the registry `self_host`. | Agent | Does not wait for a person. |
+| `remote-login` | Checks that the new Mac's SSH port is reachable. | Person | `On <name>: System Settings > General > Sharing > Remote Login: ON for user <user>` |
+| `ssh-to-new` | Creates or reuses the origin→new key, verifies fingerprint, configures `known_hosts`, authorizes the key, and creates `swarm-<name>`. | Person and agent | TTY fingerprint: `Type the fingerprint shown on <name> (or yes): `; key: `On <name> add the displayed public key to ~/.ssh/authorized_keys, then continue.` |
+| `runtimes` | Checks Homebrew, Node, Python, Herdr, Pi, gentle-pi, and the Herdr server; with `--install-missing`, attempts only Herdr and gentle-pi when prerequisites already exist. | Person | `On <name>: install missing runtimes and log Pi in once from the GUI` |
+| `ssh-to-origin` | Configures the reverse new→origin SSH channel, including the origin fingerprint and remote alias. | Agent | Does not wait for a person. A fingerprint or alias conflict fails safely. |
+| `mount` | On a `spoke`, copies the mount utility and installs persistent SMB mounting using registry `share`. | Person | `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password` |
+| `registry` | Discovers new-host data and writes its `config/hosts.json` entry. | Agent | Does not wait for a person. |
+| `skill` | Copies the `agent-swarm-remote` skill and bootstrap block to the new Mac. | Agent | Does not wait for a person. |
+| `auto-update` | Installs `swarm-update` and its daily LaunchAgent unless `--no-auto-update` is set. | Agent | Does not wait for a person. |
+| `acceptance` | Runs preflight in both directions and Herdr + Pi acceptance tests. | Person and agent | If Pi lacks a session: `Log Pi in from the GUI on <target>` |
 
-`<name>`, `<user>`, `<share.user>`, `<share.host>`, `<share.name>` y `<target>` son valores concretos sustituidos por el script.
+`<name>`, `<user>`, `<share.user>`, `<share.host>`, `<share.name>`, and `<target>` are concrete values substituted by the script.
 
-## Intervenciones de la persona
+## Human interventions
 
-El proceso comprueba las condiciones cada **5 segundos**, hasta `--wait-timeout` minutos (30 por defecto). Tras la intervención no hay que pulsar nada: el proceso continúa al detectar la condición. Si vence el tiempo, o se usó `--no-wait`, termina con una pista para reanudar; vuelva a ejecutar el mismo comando para continuar. **`--no-wait` evita sondear de nuevo una condición que acaba de fallar**: aunque la persona ya haya intervenido, una fase puede terminar en `WAITING` sin comprobar por segunda vez la condición. Para reanudar, omita esa opción o use `--wait-timeout 0` para comprobar la condición una vez y salir sin espera prolongada.
+The process checks conditions every **5 seconds** for `--wait-timeout` minutes (30 by default). No button press is required after intervention: the process continues when it detects the condition. If time expires, or `--no-wait` was used, it exits with a resumption hint; run the same command again. **`--no-wait` does not poll again for a condition that just failed**: even after a person intervenes, a phase can end in `WAITING` without a second check. To resume, omit the option or use `--wait-timeout 0` to check once without extended waiting.
 
 ### Remote Login
 
-**El script muestra:** `On <name>: System Settings > General > Sharing > Remote Login: ON for user <user>`.
+**The script displays:** `On <name>: System Settings > General > Sharing > Remote Login: ON for user <user>`.
 
-**La persona hace:** en el Mac nuevo abre **System Settings → General → Sharing → Remote Login**, lo activa y autoriza a `<user>`. También confirma que la red elegida es la correcta.
+**The person does:** On the new Mac, open **System Settings → General → Sharing → Remote Login**, enable it, and authorize `<user>`. Also confirm the selected network.
 
-**Continúa cuando:** el puerto 22 responde desde el origen.
+**Continues when:** port 22 responds from the origin.
 
-### Huella del host
+### Host fingerprint
 
-**El script muestra:** en una terminal con TTY, `Type the fingerprint shown on <name> (or yes): `. Sin TTY no puede pedir confirmación y termina esperando, indicando `Re-run with --host-fingerprint SHA256:...`.
+**The script displays:** in a TTY, `Type the fingerprint shown on <name> (or yes): `. Without a TTY it cannot request confirmation and waits with `Re-run with --host-fingerprint SHA256:...`.
 
-**La persona hace:** en el Mac nuevo lee la huella local:
+**The person does:** Read the local fingerprint on the new Mac:
 
 ```sh
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-Compárela con la huella observada desde el origen. Puede pasar el valor ya verificado sin interacción con `--host-fingerprint SHA256:...`; en una TTY también puede escribir esa huella exacta o `yes` después de verificarla localmente. Nunca desactive `StrictHostKeyChecking`.
+Compare it to the fingerprint observed from the origin. Supply the previously verified value noninteractively with `--host-fingerprint SHA256:...`; in a TTY you may also enter that exact fingerprint or `yes` after local verification. Never disable `StrictHostKeyChecking`.
 
-**Continúa cuando:** la huella entregada coincide con el escaneo SSH.
+**Continues when:** the supplied fingerprint matches the SSH scan.
 
-### Autorizar la clave del origen
+### Authorize the origin key
 
-**El script muestra:** un comando de una línea que contiene la clave pública del origen con el prefijo `no-agent-forwarding,no-port-forwarding,no-X11-forwarding `.
+**The script displays:** a single-line command containing the origin public key with prefix `no-agent-forwarding,no-port-forwarding,no-X11-forwarding `.
 
-**La persona hace:** revisa y ejecuta exactamente ese comando en el Mac nuevo; crea `~/.ssh` con modo `700`, añade la línea restringida sólo si falta y deja `authorized_keys` con modo `600`.
+**The person does:** Review and run exactly that command on the new Mac. It creates `~/.ssh` mode `700`, adds the restricted line only when absent, and leaves `authorized_keys` mode `600`.
 
-**Continúa cuando:** la conexión por clave desde el origen funciona; el script la sondea automáticamente.
+**Continues when:** key authentication from the origin works; the script polls it automatically.
 
-### Runtimes y login GUI
+### Runtimes and GUI login
 
-**El script muestra:** `On <name>: install missing runtimes and log Pi in once from the GUI`.
+**The script displays:** `On <name>: install missing runtimes and log Pi in once from the GUI`.
 
-**La persona hace:** instala Homebrew, Node, Pi, gentle-pi y Herdr si faltan; abre Herdr y abre Pi en la sesión GUI para completar el login del proveedor. Claude no es requisito. Con `--install-missing`, el script sólo intenta `brew install herdr` si Homebrew ya responde y `pi install npm:gentle-pi` si Pi ya responde: no instala Homebrew, Node ni Pi.
+**The person does:** Install Homebrew, Node, Pi, gentle-pi, and Herdr if absent; open Herdr and Pi in the GUI session to complete provider login. Claude is not required. With `--install-missing`, the script attempts `brew install herdr` only if Homebrew responds and `pi install npm:gentle-pi` only if Pi responds: it does not install Homebrew, Node, or Pi.
 
-**Continúa cuando:** las comprobaciones remotas encuentran `brew`, `node`, `python3`, `herdr`, `pi`, gentle-pi y `herdr tab list` funciona.
+**Continues when:** remote checks find `brew`, `node`, `python3`, `herdr`, `pi`, gentle-pi, and `herdr tab list` works.
 
-> Para SSH no interactivo, el script descubre directorios de herramientas habituales, incluido el `default` de `nvm` (o la versión Node instalada más alta), y usa ese `PATH` para las comprobaciones y herramientas posteriores.
+> For noninteractive SSH, the script discovers common tool directories, including `nvm` `default` (or the highest installed Node version), and uses that `PATH` for checks and later tools.
 
-### Primer montaje SMB y Keychain
+### Initial SMB mount and Keychain
 
-**El script muestra:** `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password`.
+**The script displays:** `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password`.
 
-**La persona hace:** en la GUI del Mac nuevo abre Finder, se conecta a esa URL SMB, se autentica y guarda la contraseña en Keychain. La contraseña no se escribe en comandos, archivos ni logs.
+**The person does:** In the new Mac GUI, open Finder, connect to that SMB URL, authenticate, and save the password in Keychain. Do not write the password in commands, files, or logs.
 
-**Continúa cuando:** el montaje está disponible y el catálogo se ve en `/Volumes/<share.name>`. Compruebe el recurso y el usuario en `config/hosts.json` (`share.host`, `share.name`, `share.user`); no sustituya una ruta o contraseña particular en la guía.
+**Continues when:** the mount is available and the catalog is visible at `/Volumes/<share.name>`. Confirm the share and user in `config/hosts.json` (`share.host`, `share.name`, `share.user`); do not substitute a particular path or password in this guide.
 
-### Login de Pi durante la aceptación
+### Pi login during acceptance
 
-**El script muestra:** `Log Pi in from the GUI on <target>` cuando la aceptación recibe `Not logged in`.
+**The script displays:** `Log Pi in from the GUI on <target>` when acceptance receives `Not logged in`.
 
-**La persona hace:** abre Pi en la GUI del host indicado, inicia sesión con el proveedor y confirma una consulta inocua.
+**The person does:** Open Pi in the indicated host's GUI, sign in with the provider, and confirm a harmless query.
 
-**Continúa cuando:** vuelva a ejecutarse el mismo comando después del login. La condición de esa espera no se puede sondear automáticamente; la reanudación ejecuta otra vez la aceptación.
+**Continues when:** run the same command again after login. This waiting condition cannot be polled automatically; resumption runs acceptance again.
 
-## Opciones, estado y diagnóstico
+## Options, state, and diagnosis
 
-| Opción | Uso |
+| Option | Use |
 | --- | --- |
-| `--name`, `--address`, `--user` | Obligatorios: nombre de registro, dirección y cuenta del nuevo Mac. |
-| `--role {hub,spoke}` | Rol del nuevo host; el predeterminado es `spoke`. |
-| `--host-fingerprint SHA256:...` | Huella previamente verificada; evita la pregunta de TTY. |
-| `--origin-user USER` | Cuenta que usará el canal inverso hacia el origen. |
-| `--install-missing` | Intenta instalar sólo Herdr y gentle-pi cuando Homebrew/Pi ya existen. |
-| `--auto-update` / `--no-auto-update` | Activa (predeterminado) o omite el LaunchAgent diario. |
-| `--update-time HH:MM` | Hora diaria; el predeterminado es `04:30`. |
-| `--skip-live` | Omite las pruebas de tareas vivas de aceptación, pero conserva los preflight. |
-| `--dry-run` | No escribe estado ni configuración; informa qué fases cambiarían y devuelve `4` si habría cambios. |
-| `--no-wait` | No espera intervención humana: guarda la fase como pendiente y devuelve `10`. |
-| `--wait-timeout MINUTOS` | Límite de espera; de 0 a 1440, predeterminado 30. |
-| `--verbose` | Añade comandos, códigos de salida y salida recortada al diagnóstico. |
-| `--registry RUTA` | Usa un registro alternativo. |
+| `--name`, `--address`, `--user` | Required: new Mac registry name, address, and account. |
+| `--role {hub,spoke}` | New-host role; default `spoke`. |
+| `--host-fingerprint SHA256:...` | Previously verified fingerprint; skips the TTY prompt. |
+| `--origin-user USER` | Account the reverse channel uses to reach the origin. |
+| `--install-missing` | Attempts only Herdr and gentle-pi when Homebrew/Pi already exist. |
+| `--auto-update` / `--no-auto-update` | Enables (default) or omits the daily LaunchAgent. |
+| `--update-time HH:MM` | Daily time; default `04:30`. |
+| `--skip-live` | Skips live task acceptance tests but keeps preflight checks. |
+| `--dry-run` | Does not write state or configuration; reports phases that would change and exits `4` if changes exist. |
+| `--no-wait` | Does not wait for human intervention: records the phase as pending and exits `10`. |
+| `--wait-timeout MINUTES` | Wait limit from 0 to 1440; default 30. |
+| `--verbose` | Adds commands, exit codes, and truncated output to diagnostics. |
+| `--registry PATH` | Uses an alternate registry. |
 
-Códigos de salida: `0` completado o ya configurado; `1` error de setup o error inesperado; `2` entrada inválida o ejecución como root; `4` `--dry-run` detectó cambios; `10` espera una acción humana o venció la espera.
+Exit codes: `0` complete or already configured; `1` setup or unexpected error; `2` invalid input or root execution; `4` `--dry-run` detected changes; `10` awaits human action or wait expiration.
 
-Consulte el estado persistido con:
+Inspect persistent state with:
 
 ```sh
 automation/agent-swarm/bin/swarm-setup status --name <name>
 ```
 
-El estado está en `~/.local/state/agent-swarm/setup/<name>.json` y el log en `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log`. Ante un error inesperado, consulte ese log y, si hace falta, reanude con `--verbose` y las mismas opciones; comparta sólo diagnóstico saneado, pues los logs pueden incluir claves **públicas**, rutas y nombres de usuario. La salida normal es resumida en inglés; `--verbose` registra cada comando, código de salida y salida recortada. Si el setup termina con salida `0`, confirme además `automation/agent-swarm/bin/swarm-delegate preflight <name>`: debe devolver `"status": "ready"`. No confunda el estado `WAITING` ni un éxito parcial de SSH con la aceptación final.
+State is in `~/.local/state/agent-swarm/setup/<name>.json`, and the log is in `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log`. On an unexpected error, inspect that log and, if necessary, resume with `--verbose` and the same options; share only sanitized diagnostics because logs can contain **public** keys, paths, and user names. Normal output is summarized in English; `--verbose` records every command, exit code, and truncated output. If setup exits `0`, also confirm `automation/agent-swarm/bin/swarm-delegate preflight <name>` returns `"status": "ready"`. Do not mistake `WAITING` or partial SSH success for final acceptance.
 
-Volver a ejecutar el comando contra un host ya configurado es seguro: las fases que ya cumplen su condición informan `OK` y no cambian configuración. Un nombre existente con otra dirección, una huella distinta o un alias SSH diferente falla en vez de sobrescribirlo.
+Re-running against an already configured host is safe: phases whose condition already holds report `OK` and do not alter configuration. An existing name with a different address, fingerprint, or SSH alias fails rather than being overwritten.
 
-## Procedimiento manual (referencia)
+## Manual procedure (reference)
 
-Use este apéndice sólo para diagnosticar una fase que no pueda completarse con `swarm-setup`.
+Use this appendix only to diagnose a phase that cannot be completed through `swarm-setup`.
 
-1. En el Mac nuevo, active Remote Login para la cuenta elegida y prepare Homebrew, Node, Pi, gentle-pi y Herdr; complete el login de Pi y abra Herdr en la GUI.
-2. Configure ambas direcciones SSH con clave dedicada, huella local verificada, `known_hosts`, `authorized_keys` restringido y alias `swarm-<target>`. Siga el [runbook del canal SSH](../runbooks/agent-swarm/ssh-channel.md).
-3. En Finder del spoke, realice el primer acceso SMB, guarde la contraseña en Keychain e instale el montaje persistente. Siga [Montaje SMB](../runbooks/agent-swarm/smb-mount.md).
-4. Registre el host con los valores locales correctos, instale la skill y el bloque bootstrap, valide preflight en ambos sentidos y haga el commit del registro según el flujo aprobado.
+1. On the new Mac, enable Remote Login for the selected account; prepare Homebrew, Node, Pi, gentle-pi, and Herdr; complete Pi login and open Herdr in the GUI.
+2. Configure both SSH directions with dedicated keys, locally verified fingerprints, `known_hosts`, restricted `authorized_keys`, and `swarm-<target>` aliases. Follow the [SSH channel runbook](../runbooks/agent-swarm/ssh-channel.md).
+3. In the spoke Finder, perform initial SMB access, save the password in Keychain, and install persistent mounting. Follow [SMB mounting](../runbooks/agent-swarm/smb-mount.md).
+4. Register the host with correct local values, install the skill and bootstrap block, validate preflight in both directions, and commit the registry according to the approved workflow.
 
-## Reversión
+## Rollback
 
-`swarm-setup` no ofrece un subcomando de reversión. Con autorización del propietario, retire sólo los artefactos creados para este alta: la entrada y el commit del registro, aliases y claves SSH dedicadas, las líneas autorizadas añadidas, la skill/bootstrap del host nuevo y el montaje SMB persistente. No borre claves reutilizadas, copias de seguridad ni entradas que contengan cambios ajenos. Para los procedimientos precisos consulte [Canal SSH](../runbooks/agent-swarm/ssh-channel.md#reversión-por-dirección) y [Montaje SMB](../runbooks/agent-swarm/smb-mount.md).
+`swarm-setup` has no rollback subcommand. With owner authorization, remove only artifacts created for this onboarding: the registry entry and commit, dedicated SSH aliases and keys, added authorized lines, the new host's skill/bootstrap, and persistent SMB mount. Do not delete reused keys, backups, or entries containing unrelated changes. For exact procedures see [SSH channel](../runbooks/agent-swarm/ssh-channel.md#per-direction-rollback) and [SMB mounting](../runbooks/agent-swarm/smb-mount.md).
 
-## Problemas frecuentes
+## Common problems
 
-| Síntoma | Acción segura |
+| Symptom | Safe action |
 | --- | --- |
-| `Not logged in` | Inicie sesión en Pi desde la **GUI** del host indicado; no intente autenticarlo por SSH. Después reejecute el mismo comando. |
-| El script espera runtimes aunque Pi funciona en Terminal | Revise la versión `nvm` predeterminada o instalada, los directorios del `PATH` no interactivo y el resultado de los CLI bajo SSH. Un shell remoto `zsh` sin versiones `nvm` no debe abortar por un glob sin coincidencias; si aparece `no matches found`, compruebe que usa una versión del setup con esa corrección. |
-| La huella no coincide | Detenga el alta. Compare de nuevo la lectura local y el escaneo de red; no use `StrictHostKeyChecking=no`. |
-| El comando de autorización falla | Revise que se ejecutó completo en el Mac nuevo y que no se modificó la clave pública restringida que imprimió el script. |
-| La primera copia remota falla con `scp: dest open ... No such file or directory` | El directorio padre del destino todavía no existe. Use una versión del setup que lo cree antes de `scp`; no cambie el destino a una carpeta ajena ni dé permisos amplios para sortear el error. |
-| El montaje SMB no aparece | Conéctese primero desde Finder, guarde la contraseña en Keychain y siga el runbook SMB; no ponga la contraseña en la terminal. |
-| El nombre ya existe con otra dirección | No se sobrescribe: corrija la decisión de registro o use el host correcto. |
-| Una fase informa `WAITING` tras completar la acción | Si usó `--no-wait`, repita sin esa opción (o con `--wait-timeout 0`); verifique la condición, el estado persistido y el log antes de concluir que falló la autorización. |
+| `Not logged in` | Sign in to Pi from the indicated host's **GUI**; do not authenticate it over SSH. Then rerun the same command. |
+| The script waits for runtimes although Pi works in Terminal | Review the default or installed `nvm` version, noninteractive `PATH` directories, and CLI results over SSH. A remote `zsh` shell without `nvm` versions must not abort on a nonmatching glob; if `no matches found` appears, use a setup version containing that fix. |
+| Fingerprint mismatch | Stop onboarding. Compare the local reading and network scan again; do not use `StrictHostKeyChecking=no`. |
+| Authorization command fails | Verify it ran in full on the new Mac and did not alter the restricted public key printed by the script. |
+| Initial remote copy fails with `scp: dest open ... No such file or directory` | The destination parent directory does not yet exist. Use a setup version that creates it before `scp`; do not redirect the destination to an unrelated folder or broaden permissions to work around it. |
+| SMB mount does not appear | Connect first in Finder, save the password in Keychain, and follow the SMB runbook; never put the password in the terminal. |
+| Name already exists with another address | It is not overwritten: correct the registry decision or use the correct host. |
+| A phase reports `WAITING` after completing the action | If you used `--no-wait`, repeat without it (or with `--wait-timeout 0`); verify the condition, persistent state, and log before concluding authorization failed. |
 
-## Referencias
+## References
 
-- [Actualización automática](../runbooks/agent-swarm/auto-update.md)
-- [Canal SSH bidireccional](../runbooks/agent-swarm/ssh-channel.md)
-- [Montaje SMB entre equipos](../runbooks/agent-swarm/smb-mount.md)
+- [Automatic updates](../runbooks/agent-swarm/auto-update.md)
+- [Bidirectional SSH channel](../runbooks/agent-swarm/ssh-channel.md)
+- [SMB mounting between machines](../runbooks/agent-swarm/smb-mount.md)

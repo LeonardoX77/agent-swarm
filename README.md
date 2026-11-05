@@ -7,7 +7,7 @@
 Delegate tasks to whichever machine is free, put the compute you already own to work,
 and let each agent use its own tools without ever sharing credentials.
 
-🇬🇧 English · [🇪🇸 Español](README-ES.md)
+🇬🇧 English (canonical) · [🇪🇸 Español](README-ES.md)
 
 </div>
 
@@ -94,7 +94,7 @@ flowchart TB
 | `swarm-delegate` | The orchestrator's tool: `list`, `self`, `preflight`, `submit`, `recover` and `close`. |
 | `swarm-herdr-task` | The node's adapter: opens its own tab and Pi session, keeps the ledger and reads the result. |
 | `swarm-smb-mount` | Mounts only the registered share, using the node's local credentials. |
-| `swarm-update` | Checks for and installs tool updates, without `sudo`. |
+| `swarm-update` | Checks for and installs updates for Herdr, mosh, moshi-hook, gentle-ai, Pi and Pi extensions, without `sudo`. |
 | `skills/agent-swarm-remote` | Teaches Pi and Claude to delegate or receive an envelope without leaving the contract. |
 
 Each node has one of two roles: the **hub** publishes the project catalog over SMB, and **spokes** mount it to work on the same projects.
@@ -120,7 +120,7 @@ automation/agent-swarm/bin/swarm-setup add-host \
   --install-missing --no-auto-update
 ```
 
-Drop `--no-auto-update` if you want the daily update. If the command stops waiting for an action, do it and **run the same command again**: it continues from the pending phase.
+Drop `--no-auto-update` if you want the daily update. A node set up before that phase existed has no updater: run `automation/agent-swarm/bin/swarm-update install` on it. Herdr is upgraded but its server is never restarted; the run only reports `server restart pending` in `swarm-update` output and in `~/Library/Logs/mac-agent-swarm/swarm-update.log`, so restart it yourself when convenient. If the command stops waiting for an action, do it and **run the same command again**: it continues from the pending phase.
 
 ```mermaid
 flowchart TD
@@ -227,7 +227,7 @@ If you get `unknown`, query again with `recover` and the same UUID. If nothing c
 
 ## 📚 Documentation
 
-The detailed documentation under `docs/` is written in Spanish.
+The detailed documentation under `docs/` is the canonical English documentation. [Spanish documentation is available under `docs/es/`](docs/es/).
 
 | If you want to... | Read |
 | --- | --- |

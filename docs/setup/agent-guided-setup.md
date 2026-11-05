@@ -1,37 +1,37 @@
-# Instalación guiada de Agent Swarm
+# Guided Agent Swarm setup
 
-La única ruta de alta es `swarm-setup add-host` desde un Mac ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente.
+The only onboarding path is `swarm-setup add-host` from an already registered Mac. It configures the Herdr + Pi channel resumably and pauses for decisions that only a person at the relevant host can make.
 
-## Camino rápido
+## Quick path
 
-1. Confirme que el origen figura en `config/hosts.json` (registro local no versionado; cree uno desde `config/hosts.example.json` si falta) y ejecute el comando desde su checkout local.
-2. Ejecute el procedimiento descrito en [Agregar un equipo](add-host.md#camino-rápido) con el nombre, dirección y usuario del Mac nuevo.
-3. Complete las pausas locales: Remote Login, comparación de huella, login GUI de Pi y primer acceso SMB.
-4. Repita el mismo comando con las mismas opciones hasta que la aceptación bidireccional termine correctamente.
-5. Antes de delegar trabajo, ejecute `swarm-delegate preflight <destino>` y siga el [runbook de validación](../runbooks/agent-swarm/validation.md).
+1. Confirm the origin appears in `config/hosts.json` (an unversioned local registry; create one from `config/hosts.example.json` if absent) and run the command from its local checkout.
+2. Follow [Add a host](add-host.md#quick-path) with the new Mac's name, address, and user.
+3. Complete local pauses: Remote Login, fingerprint comparison, Pi GUI login, and initial SMB access.
+4. Repeat exactly the same command and options until bidirectional acceptance completes.
+5. Before delegating work, run `swarm-delegate preflight <target>` and follow the [validation runbook](../runbooks/agent-swarm/validation.md).
 
-El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determinan alias, endpoints, usuarios, catálogo, repositorio y rutas. No reemplace esos datos por nombres de equipos, IPs o rutas de otro despliegue.
+The registry is the source of truth. Its `hosts`, `share`, and role fields determine aliases, endpoints, users, catalog, repository, and paths. Do not replace them with computer names, IPs, or paths from another deployment.
 
-## Pausas humanas
+## Human pauses
 
-| Momento | Acción local | Confirmación segura |
+| Moment | Local action | Safe confirmation |
 | --- | --- | --- |
-| Acceso remoto | Active Remote Login para la cuenta registrada y confirme la red elegida. | El puerto SSH responde desde el origen. |
-| Huella SSH | Compare la huella vista en el host con el escaneo desde el origen. | Coinciden; `StrictHostKeyChecking` sigue activo. |
-| Runtimes y login | Instale lo aprobado y complete el login de Pi desde la GUI cuando se solicite. | Los checks encuentran Pi, gentle-pi y Herdr. |
-| SMB | En Finder, conecte a la URL que muestra el setup; guarde la contraseña sólo en Keychain si corresponde. | El catálogo registrado aparece en el spoke. |
-| Aceptación | Resuelva `Not logged in` desde la GUI indicada y reanude el mismo setup. | Preflight y aceptación terminan en ambos sentidos. |
+| Remote access | Enable Remote Login for the registered account and confirm the selected network. | The SSH port responds from the origin. |
+| SSH fingerprint | Compare the fingerprint shown at the host with the scan from the origin. | They match; `StrictHostKeyChecking` remains enabled. |
+| Runtimes and login | Install approved software and complete Pi GUI login when requested. | Checks find Pi, gentle-pi, and Herdr. |
+| SMB | In Finder, connect to the URL shown by setup; save the password only in Keychain when appropriate. | The registered catalog appears on the spoke. |
+| Acceptance | Resolve `Not logged in` in the indicated GUI and resume the same setup. | Preflight and acceptance finish both ways. |
 
-## Límites
+## Boundaries
 
-- El setup no autoriza cambios de red, `sudo`, credenciales ni instalaciones ajenas a sus fases.
-- Los perfiles, Keychain, sesiones, cachés y directorios personales permanecen en cada Mac.
-- La skill se copia mediante el mecanismo local del setup; SMB no transporta credenciales ni directorios personales.
-- Guarde sólo estado, fase, versión y código de salida saneados. No guarde contraseñas, tokens, claves privadas ni sobres de tarea en tickets o logs compartidos.
-- Si el resultado es ambiguo, consulte el estado persistido antes de reintentar. No reinicie sesiones existentes para forzar una recuperación.
+- Setup does not authorize network changes, `sudo`, credentials, or installations outside its phases.
+- Profiles, Keychain, sessions, caches, and home directories stay on each Mac.
+- The skill is copied through setup's local mechanism; SMB carries neither credentials nor home directories.
+- Store only sanitized state, phase, version, and exit code. Do not store passwords, tokens, private keys, or task envelopes in shared tickets or logs.
+- If a result is ambiguous, consult persistent state before retrying. Do not restart existing sessions to force recovery.
 
-## Operación posterior
+## Subsequent operation
 
-Use `swarm-delegate list` para ver los destinos, `self` para identificar el origen y `preflight <destino>` antes de enviar una tarea. El [runbook de tareas Herdr + Pi](../runbooks/agent-swarm/herdr-tasks.md) describe `submit`, `recover` y `close`, incluido el requisito de conservar el mismo UUID tras un fallo de transporte.
+Use `swarm-delegate list` to see destinations, `self` to identify the origin, and `preflight <target>` before submitting a task. The [Herdr + Pi tasks runbook](../runbooks/agent-swarm/herdr-tasks.md) documents `submit`, `recover`, and `close`, including retaining the same UUID after a transport failure.
 
-Para un diagnóstico de fases, opciones, estado y recuperación, consulte [Agregar un equipo](add-host.md). Para SSH y SMB, use respectivamente [Canal SSH](../runbooks/agent-swarm/ssh-channel.md) y [Montaje SMB](../runbooks/agent-swarm/smb-mount.md).
+For phase, option, state, and recovery diagnosis, read [Add a host](add-host.md). For SSH and SMB, use [SSH channel](../runbooks/agent-swarm/ssh-channel.md) and [SMB mount](../runbooks/agent-swarm/smb-mount.md), respectively.

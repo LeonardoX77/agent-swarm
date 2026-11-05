@@ -1,32 +1,32 @@
-# Canal SSH bidireccional entre hosts registrados
+# Bidirectional SSH channel between registered hosts
 
-Este runbook configura **una dirección** del canal Agent Swarm: un host de origen se conecta a un host destino con un alias `swarm-<target>`. Repítalo para la dirección inversa. La clave dedicada no lleva frase de paso para que un agente pueda usarla sin atención humana; las restricciones de `authorized_keys` reducen reenvíos, pero **siguen permitiendo una shell** y no son un sandbox.
+This runbook configures **one direction** of the Agent Swarm channel: an origin host connects to a destination host through a `swarm-<target>` alias. Repeat it for the reverse direction. The dedicated key has no passphrase so an agent can use it unattended; `authorized_keys` restrictions reduce forwarding but **still permit a shell** and are not a sandbox.
 
-Use nombres y valores del registro `config/hosts.json`; no copie nombres de hosts, usuarios ni rutas de este documento.
+Use names and values from `config/hosts.json`; do not copy host names, users, or paths from this document.
 
-## Plantilla por dirección
+## Per-direction template
 
-| Marcador | Valor que debe usarse |
+| Placeholder | Required value |
 | --- | --- |
-| `<origin>` | Nombre del host que inicia SSH. |
-| `<target>` | Nombre de registro del host destino (`[a-z0-9-]`). |
-| `<host>` | Dirección LAN/Tailscale o nombre confirmado del destino. |
-| `<user>` | Cuenta autorizada en el destino. |
-| `<key>` | `~/.ssh/agent_swarm_<target>` en el origen. |
+| `<origin>` | Name of the host that starts SSH. |
+| `<target>` | Registry name of the destination host (`[a-z0-9-]`). |
+| `<host>` | Confirmed destination LAN/Tailscale address or name. |
+| `<user>` | Authorized account at the destination. |
+| `<key>` | `~/.ssh/agent_swarm_<target>` at the origin. |
 
-### 1. Activar acceso en el destino
+### 1. Enable access at the destination
 
-**Persona — en la GUI del destino.** Active **Remote Login** para la cuenta `<user>` y confirme la red LAN o Tailscale.
+**Person — in the destination GUI.** Enable **Remote Login** for account `<user>` and confirm the LAN or Tailscale network.
 
-**STOP:** el login de macOS, contraseña, firewall, Tailscale y aprobaciones de Sharing requieren intervención humana.
+**STOP:** macOS login, password, firewall, Tailscale, and Sharing approvals require human intervention.
 
-**Cómo verificar:** Remote Login muestra a `<user>` entre las cuentas autorizadas y el destino tiene la dirección `<host>` confirmada.
+**Verify:** Remote Login lists `<user>` among authorized accounts and the destination has confirmed address `<host>`.
 
-**Cómo reanudar:** tras la aprobación, repita esa comprobación local; no intente abrir SSH con una contraseña enviada por el agente.
+**Resume:** after approval, repeat this local check; do not attempt SSH using a password sent by the agent.
 
-### 2. Crear o reutilizar una clave en el origen
+### 2. Create or reuse a key at the origin
 
-**Agente — en `<origin>`, con autorización.** Puede reutilizar una clave ya funcional para un alias; si no existe, cree una clave dedicada. Nunca sobrescriba una clave existente:
+**Agent — at `<origin>`, with authorization.** You may reuse a key already working for an alias; otherwise create a dedicated key. Never overwrite an existing key:
 
 ```sh
 if [ -e ~/.ssh/agent_swarm_<target> ] || [ -e ~/.ssh/agent_swarm_<target>.pub ]; then
@@ -36,41 +36,41 @@ else
 fi
 ```
 
-**Verificación:** existen ambos archivos de la clave nueva, o se documentó la clave previamente funcional que se reutiliza.
+**Verify:** both new-key files exist, or the previously working reused key is documented.
 
-### 3. Verificar la huella de host antes de confiar
+### 3. Verify the host fingerprint before trusting it
 
-**Persona — delante de la pantalla local de `<target>`.** Lea la huella directamente en el destino y comuníquela por la pantalla o por un canal ya confiable:
+**Person — in front of `<target>`'s local screen.** Read the fingerprint directly at the destination and communicate it in person or over an already trusted channel:
 
 ```sh
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-**STOP:** no agregue `known_hosts` ni acepte una conexión SSH hasta comparar esta lectura local con el escaneo del origen.
+**STOP:** do not add to `known_hosts` or accept an SSH connection until this local reading has been compared with the origin scan.
 
-**Agente — en `<origin>`.** Obtenga la huella observada desde la red:
+**Agent — at `<origin>`.** Obtain the fingerprint observed from the network:
 
 ```sh
 ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
 ```
 
-**Cómo verificar:** tipo de clave y huella coinciden exactamente con la lectura local del destino.
+**Verify:** key type and fingerprint exactly match the destination's local reading.
 
-**Cómo reanudar:** sólo ante coincidencia, agregue la clave escaneada a `~/.ssh/known_hosts`. Ante diferencia, detenga la configuración, verifique `<host>` localmente y repita ambas lecturas. Nunca desactive `StrictHostKeyChecking`.
+**Resume:** only on a match, add the scanned key to `~/.ssh/known_hosts`. On a difference, stop setup, verify `<host>` locally, and repeat both readings. Never disable `StrictHostKeyChecking`.
 
-### 4. Autorizar la clave pública en el destino
+### 4. Authorize the public key at the destination
 
-**Agente — en `<target>`, después de la autorización humana.** Haga una copia de seguridad de `~/.ssh/authorized_keys` y añada, sin sobrescribir líneas existentes, la clave pública del origen. La entrada debe ser una sola línea: el prefijo exacto y después la clave pública original.
+**Agent — at `<target>`, after human authorization.** Back up `~/.ssh/authorized_keys` and add the origin's public key without overwriting existing lines. The entry must be one line: the exact prefix followed by the original public key.
 
 ```text
 no-agent-forwarding,no-port-forwarding,no-X11-forwarding
 ```
 
-**Verificación:** la copia de seguridad existe, la entrada aparece una sola vez, conserva toda la clave pública y las demás entradas permanecen intactas.
+**Verify:** a backup exists, the entry appears once, retains the entire public key, and all other entries remain intact.
 
-### 5. Crear el alias en el origen
+### 5. Create the alias at the origin
 
-**Agente — en `<origin>`.** Añada a `~/.ssh/config`:
+**Agent — at `<origin>`.** Add to `~/.ssh/config`:
 
 ```sshconfig
 Host swarm-<target>
@@ -86,24 +86,24 @@ Host swarm-<target>
   ForwardAgent no
 ```
 
-Al reutilizar una clave existente, conserve su `IdentityFile`; el resto de controles sigue siendo obligatorio.
+When reusing a key, retain its `IdentityFile`; all other controls remain mandatory.
 
-**Verificación:** desde `<origin>`, ejecute:
+**Verify:** from `<origin>`, run:
 
 ```sh
 ssh swarm-<target> hostname
 ```
 
-Debe devolver el nombre del destino sin solicitar contraseña ni confirmar una huella. Repita los pasos 1–5 con origen y destino intercambiados para obtener comunicación en ambos sentidos.
+It must return the destination name without requesting a password or fingerprint confirmation. Repeat steps 1–5 with origin and destination swapped to establish bidirectional communication.
 
-## Uso con Agent Swarm
+## Use with Agent Swarm
 
-Una vez que ambas direcciones responden, confirme el registro y el catálogo con `swarm-delegate preflight <target>`. Si el destino es un spoke y informa `catalog_missing`, configure su montaje SMB antes de enviar tareas. Consulte [Agregar un equipo al canal Agent Swarm](../../setup/add-host.md) para el proceso completo y [Montaje SMB entre equipos](smb-mount.md) para el montaje persistente.
+Once both directions respond, confirm registry and catalog with `swarm-delegate preflight <target>`. If the destination is a spoke and reports `catalog_missing`, configure its SMB mount before submitting tasks. See [Add a host to the Agent Swarm channel](../../setup/add-host.md) for the complete process and [SMB mounting between machines](smb-mount.md) for persistent mounting.
 
-## Reversión por dirección
+## Per-direction rollback
 
-**Agente — con autorización.** Quite el bloque `Host swarm-<target>` del origen, la entrada que se añadió a `authorized_keys` en el destino (o restaure la copia de seguridad si sólo contiene este cambio), y el par de clave dedicada `agent_swarm_<target>` del origen. No elimine una clave reutilizada ni una copia de seguridad con cambios ajenos.
+**Agent — with authorization.** Remove the `Host swarm-<target>` block from the origin, the added `authorized_keys` entry at the destination (or restore the backup if it contains only this change), and the dedicated `agent_swarm_<target>` key pair at the origin. Do not remove a reused key or a backup containing unrelated changes.
 
-## Comprobación final
+## Final check
 
-En cada dirección, compruebe que `ssh swarm-<target> hostname` funciona sin contraseña y que el alias coincide con el host definido en `config/hosts.json`. Desde un host registrado, `swarm-delegate preflight <target>` debe devolver `"status": "ready"` después de montar el catálogo en un `spoke`. Una conexión SSH exitosa por sí sola no demuestra que Pi, Herdr y la aceptación bidireccional funcionen: complete las fases de `swarm-setup` y consulte su estado.
+In each direction, verify that `ssh swarm-<target> hostname` works without a password and that the alias matches the host in `config/hosts.json`. From a registered host, `swarm-delegate preflight <target>` must return `"status": "ready"` after mounting the catalog on a `spoke`. A successful SSH connection alone does not show that Pi, Herdr, and bidirectional acceptance work: complete the `swarm-setup` phases and inspect their status.

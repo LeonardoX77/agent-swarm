@@ -1,65 +1,65 @@
-# Tareas Pi mediante Herdr
+# Pi tasks through Herdr
 
-`swarm-herdr-task` ejecuta una tarea Pi en el host que controla Herdr. Crea recursos exclusivos por UUID, guarda un ledger durable y obtiene la respuesta desde el JSONL de la sesión propia. `swarm-delegate` permite invocarlo desde otro Mac registrado por SSH.
+`swarm-herdr-task` runs a Pi task on the host controlled by Herdr. It creates UUID-exclusive resources, keeps a durable ledger, and obtains the response from its own session JSONL. `swarm-delegate` invokes it over SSH from another registered Mac.
 
-## Ciclo de vida
+## Lifecycle
 
-1. `submit` recibe por stdin un sobre y reserva `task_id` en el ledger.
-2. Crea una sesión privada con header Pi v3, una tab Herdr sin foco y un agente Pi con `--session` apuntando a esa sesión.
-3. Persiste cada intención antes del efecto remoto y verifica tab, pane, runtime, nombre y sesión antes de enviar el sobre exacto.
-4. `recover` sólo lee el JSONL propio: localiza el mensaje de usuario y sigue su cadena hasta una respuesta de asistente final con `stopReason: "stop"`.
-5. `close` cierra únicamente la tab propia después de un resultado verificable. La ausencia tipada de esa tab confirma el cierre.
+1. `submit` receives an envelope on stdin and reserves `task_id` in the ledger.
+2. It creates a private session with a Pi v3 header, an unfocused Herdr tab, and a Pi agent whose `--session` points to that session.
+3. It persists every intent before the remote effect and verifies tab, pane, runtime, name, and session before sending the exact envelope.
+4. `recover` reads only its own JSONL: it finds the user message and follows its chain to a final assistant response with `stopReason: "stop"`.
+5. `close` closes only its own tab after a verifiable result. The typed absence of that tab confirms closure.
 
-Las fases del ledger son `reserved`, `create_intent`, `created`, `start_intent`, `started`, `submit_intent`, `submitted`, `result`, `cleanup_intent` y `closed`; `unknown` y `recover_intent` representan recuperación. No hay camino automático de vuelta hacia `submit`.
+Ledger phases are `reserved`, `create_intent`, `created`, `start_intent`, `started`, `submit_intent`, `submitted`, `result`, `cleanup_intent`, and `closed`; `unknown` and `recover_intent` represent recovery. There is no automatic path back to `submit`.
 
-## Delegación entre Macs
+## Delegation between Macs
 
-La fuente de verdad es `config/hosts.json`. Define alias SSH, catálogo, checkout, PATH y cwd GUI por host. Desde el origen:
+`config/hosts.json` is the source of truth. It defines the SSH alias, catalog, checkout, PATH, and GUI cwd per host. From the origin:
 
 ```sh
 automation/agent-swarm/bin/swarm-delegate list
 automation/agent-swarm/bin/swarm-delegate self
-automation/agent-swarm/bin/swarm-delegate preflight <destino>
-automation/agent-swarm/bin/swarm-delegate submit <destino> < envelope.json
-automation/agent-swarm/bin/swarm-delegate recover <destino> <UUID> [--wait SEGUNDOS]
-automation/agent-swarm/bin/swarm-delegate close <destino> <UUID>
+automation/agent-swarm/bin/swarm-delegate preflight <target>
+automation/agent-swarm/bin/swarm-delegate submit <target> < envelope.json
+automation/agent-swarm/bin/swarm-delegate recover <target> <UUID> [--wait SECONDS]
+automation/agent-swarm/bin/swarm-delegate close <target> <UUID>
 ```
 
-`<destino>` debe ser un nombre de `list`. `preflight` sólo comprueba SSH y el catálogo; si un spoke informa `catalog_missing`, monte el share siguiendo [Montaje SMB](smb-mount.md) antes de enviar la tarea. La respuesta remota se conserva sin cambios.
+`<target>` must be a `list` name. `preflight` checks only SSH and catalog; if a spoke reports `catalog_missing`, mount its share using [SMB mount](smb-mount.md) before submitting work. The remote response is retained unchanged.
 
-Una salida SSH 255 deja el estado desconocido desde el origen. Recupere más tarde o repita `submit` con el **mismo** sobre; nunca cree otro UUID para el mismo trabajo. Si un Mac está apagado, el canal no se usa y se emplean alternativas locales.
+SSH exit 255 makes the state unknown from the origin. Recover later or repeat `submit` with the **same** envelope; never create another UUID for the same work. If a Mac is off, do not use the channel; use local alternatives.
 
-## Sobre y uso rápido
+## Envelope and quick use
 
-El sobre contiene exactamente `task_id`, `origin_host`, `project`, `goal`, `acceptance` y `mode: executor`. `task_id` es UUID; `project` es relativo al catálogo. Los marcadores siguientes deben sustituirse con valores del registro:
+The envelope contains exactly `task_id`, `origin_host`, `project`, `goal`, `acceptance`, and `mode: executor`. `task_id` is a UUID; `project` is relative to the catalog. Replace these placeholders with registry values:
 
 ```sh
-printf '%s' '{"task_id":"<UUID>","origin_host":"<host-de-origen>","project":"<proyecto-relativo>","goal":"Revise el cambio.","acceptance":"Devuelva hallazgos.","mode":"executor"}' \
- | automation/agent-swarm/bin/swarm-herdr-task submit --project-root <raíz-del-catálogo>
+printf '%s' '{"task_id":"<UUID>","origin_host":"<origin-host>","project":"<relative-project>","goal":"Review the change.","acceptance":"Return findings.","mode":"executor"}' \
+ | automation/agent-swarm/bin/swarm-herdr-task submit --project-root <catalog-root>
 
 automation/agent-swarm/bin/swarm-herdr-task recover <UUID>
 automation/agent-swarm/bin/swarm-herdr-task close <UUID>
 ```
 
-`recover` espera y consulta cada dos segundos durante 120 segundos de forma predeterminada. `--wait` admite 0–900; `--wait 0` hace una sola lectura. `submit` sólo acepta stdin y limita su entrada; `swarm-herdr-task --registry RUTA` permite una fuente de registro validada para pruebas.
+`recover` waits and polls every two seconds for 120 seconds by default. `--wait` accepts 0–900; `--wait 0` performs one read. `submit` accepts only bounded stdin; `swarm-herdr-task --registry PATH` permits a validated registry source in tests.
 
-## Límites de seguridad y recuperación
+## Security and recovery boundaries
 
-| Área | Contrato |
+| Area | Contract |
 | --- | --- |
-| Identidad | Un host desconocido falla salvo un catálogo explícito, existente y seguro. |
-| Ejecución | Herdr se resuelve explícitamente o mediante `PATH`; cada llamada usa argv cerrado, sin shell ni entorno inyectado. |
-| Estado | Ledger, sesiones y directorios son privados; una sesión existente o un efecto ambiguo deja `unknown`. |
-| Reintentos | No hay reenvío automático ni garantía distribuida de exactamente una vez. |
-| Cierre | Se rechazan agentes activos, identidades ajenas y resultados incompletos. |
+| Identity | An unknown host fails unless an explicit, existing, secure catalog is supplied. |
+| Execution | Herdr resolves explicitly or through `PATH`; each call uses closed argv, without shell or injected environment. |
+| State | Ledger, sessions, and directories are private; an existing session or ambiguous effect becomes `unknown`. |
+| Retries | There is no automatic resend or distributed exactly-once guarantee. |
+| Close | Active agents, foreign identities, and incomplete results are rejected. |
 
-Un informe válido, incluso `pending`, `unknown` o `timed_out`, sale con código 0. Las entradas inválidas o fallos salen con código 2. La respuesta final incluye `task_id`, `status`, `resubmit: false` y, cuando existe, `resulttext`, `userentry` y `assistantentry`.
+A valid report, including `pending`, `unknown`, or `timed_out`, exits 0. Invalid input or failure exits 2. The final response includes `task_id`, `status`, `resubmit: false`, and, when available, `resulttext`, `userentry`, and `assistantentry`.
 
-## Verificación local
+## Local verification
 
 ```sh
 python3 -m unittest automation/agent-swarm/test/test_herdr_task.py
 python3 -m unittest discover -s automation/agent-swarm/test
 ```
 
-Las pruebas usan fixtures de Herdr. No prueban una GUI viva ni constituyen un despliegue.
+Tests use Herdr fixtures. They neither test a live GUI nor constitute a deployment.

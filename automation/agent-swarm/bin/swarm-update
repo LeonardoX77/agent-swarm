@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-COMPONENTS = ("herdr", "mosh", "moshi-hook", "pi", "pi-extensions")
+COMPONENTS = ("herdr", "mosh", "moshi-hook", "gentle-ai", "pi", "pi-extensions")
 DEFAULT_CONFIG = {"enabled": True, "hour": 4, "minute": 30, "components": list(COMPONENTS)}
 
 class ToolError(Exception):
@@ -124,7 +124,7 @@ class SwarmUpdate:
     def check(self, names, refresh=False):
         # check is deliberately read-only; refresh is reserved for callers wanting brew metadata.
         self.use_tool_path()
-        if refresh and any(name in ("herdr", "mosh", "moshi-hook") for name in names): self._run(["brew", "update"], 1200)
+        if refresh and any(name in ("herdr", "mosh", "moshi-hook", "gentle-ai") for name in names): self._run(["brew", "update"], 1200)
         return [self.component(name).check() for name in names]
 
     def run_update(self, force=False):
@@ -137,7 +137,7 @@ class SwarmUpdate:
             return {"exit_code": 0, "throttled": True, "components": [], "message": "Last successful run was less than 20 hours ago"}
         names = config["components"]
         self.use_tool_path(config)
-        if any(name in ("herdr", "mosh", "moshi-hook") for name in names): self._run(["brew", "update"], 1200)
+        if any(name in ("herdr", "mosh", "moshi-hook", "gentle-ai") for name in names): self._run(["brew", "update"], 1200)
         results = []
         failed = False
         for name in names:
@@ -191,9 +191,9 @@ class Component:
         if self.name == "moshi-hook":
             if self.tool._run(["brew", "list", "--versions", "moshi-hook"]).returncode == 0: return "brew"
             return "standalone"
-        return "brew" if self.name in ("herdr", "mosh") else "pi"
+        return "brew" if self.name in ("herdr", "mosh", "gentle-ai") else "pi"
     def check(self):
-        if self.name in ("herdr", "mosh"):
+        if self.name in ("herdr", "mosh", "gentle-ai"):
             listed = self.tool._run(["brew", "list", "--versions", self.name])
             if listed.returncode: return {"name": self.name, "status": "skipped", "reason": "not installed"}
             return self._brew_check(listed.stdout)
@@ -217,7 +217,7 @@ class Component:
         available = item.get("current_version") if item else current
         return {"name": self.name, "status": "installed", "current": current, "available": available, "outdated": bool(item), "source": "brew"}
     def update(self):
-        if self.name in ("herdr", "mosh") or (self.name == "moshi-hook" and self.source() == "brew"):
+        if self.name in ("herdr", "mosh", "gentle-ai") or (self.name == "moshi-hook" and self.source() == "brew"):
             result = self.tool._run(["brew", "upgrade", self.name], 1200)
         elif self.name == "moshi-hook":
             binary = "moshi-hook" if self.tool._run(["moshi-hook", "--version"]).returncode == 0 else str(self.tool.home / ".local/bin/moshi-hook")

@@ -1,40 +1,42 @@
-# Actualización automática del host
+# Automatic host updates
 
-`swarm-update` comprueba y actualiza sin `sudo` los componentes locales del canal: Herdr, `mosh` (incluido `mosh-server`), `moshi-hook`, Pi y las extensiones de Pi. Es un CLI Python autocontenido: se copia durante la instalación a `~/.local/agent-swarm/bin/swarm-update` y no instala dependencias.
+`swarm-update` checks and updates the channel's local components without `sudo`: Herdr, `mosh` (including `mosh-server`), `moshi-hook`, `gentle-ai`, Pi, and Pi extensions. It is a self-contained Python CLI copied during installation to `~/.local/agent-swarm/bin/swarm-update`; it installs no dependencies.
 
-## Instalación y calendario
+## Installation and schedule
 
-Instale el agente desde el checkout del repositorio:
+Install the agent from the repository checkout:
 
 ```bash
 automation/agent-swarm/bin/swarm-update install
 ```
 
-El valor predeterminado es una vez al día a las 04:30. Se puede cambiar en la instalación, por ejemplo:
+The default schedule is once daily at 04:30. Change it during installation, for example:
 
 ```bash
-automation/agent-swarm/bin/swarm-update install --hour 3 --minute 15 --components herdr,mosh,moshi-hook,pi,pi-extensions
+automation/agent-swarm/bin/swarm-update install --hour 3 --minute 15 --components herdr,mosh,moshi-hook,gentle-ai,pi,pi-extensions
 ```
 
-La instalación crea el LaunchAgent `com.mac-agent-swarm.update`. `launchd` ejecuta una tarea de calendario que se perdió mientras el Mac dormía cuando el equipo vuelve a despertar; no es necesario dejarlo encendido a la hora programada. El comando no debe ejecutarse como root y nunca usa `sudo`.
+Installation creates the `com.mac-agent-swarm.update` LaunchAgent. `launchd` runs a scheduled job missed while the Mac was asleep after it wakes; the machine need not remain on at the scheduled time. Do not run the command as root: it never uses `sudo`.
 
-## Operación
+A node configured before the `auto-update` phase existed (for example, the Mac mini on October 27) has no LaunchAgent, configuration, or registry. Run `swarm-update install` from that node's checkout (on a spoke, the catalog mount is sufficient). If it has an older configuration without `gentle-ai`, run `install` again to add it to `components`.
+
+## Operation
 
 ```bash
-swarm-update check             # sólo lectura; no ejecuta brew update
-swarm-update check --refresh   # también actualiza los metadatos de Homebrew
-swarm-update run               # actualiza si pasaron al menos 20 horas
-swarm-update run --force       # omite esa espera
+swarm-update check             # read-only; does not run brew update
+swarm-update check --refresh   # also refreshes Homebrew metadata
+swarm-update run               # updates if at least 20 hours have elapsed
+swarm-update run --force       # skips that wait
 swarm-update status
-swarm-update uninstall         # retira sólo el LaunchAgent
+swarm-update uninstall         # removes only the LaunchAgent
 ```
 
-La salida normal es un resumen en inglés, una línea por componente. `--verbose` añade el `PATH` usado y cada comando, su código de salida y su salida recortada; `--json` emite el informe para automatización. Un fallo de un componente no impide intentar los demás, pero hace que `run` termine con código 1. `check` no cambia software instalado, pero Homebrew puede actualizar su caché local de API.
+Normal output is an English, one-line-per-component summary. `--verbose` adds the PATH used and each command, exit code, and truncated output; `--json` emits the automation report. Failure of one component does not prevent trying the others, but makes `run` exit with code 1. `check` does not alter installed software, though Homebrew may refresh its local API cache.
 
-El archivo `~/.config/agent-swarm/update.json` contiene `enabled`, hora, minuto, componentes y el `PATH` que usa el agente. Para desactivar las actualizaciones sin retirar la configuración, cambie estrictamente `"enabled"` a `false`; para retirar el LaunchAgent use `swarm-update uninstall`. Las ejecuciones se registran en `~/Library/Logs/mac-agent-swarm/swarm-update.log` y el último resultado queda en `~/.local/state/agent-swarm/update/last-run.json`.
+`~/.config/agent-swarm/update.json` contains `enabled`, hour, minute, components, and the agent PATH. To disable updates without removing the configuration, set only `"enabled"` to `false`; to remove the LaunchAgent, use `swarm-update uninstall`. Runs are logged to `~/Library/Logs/mac-agent-swarm/swarm-update.log`; the last result is `~/.local/state/agent-swarm/update/last-run.json`.
 
-## Comportamiento por componente
+## Per-component behavior
 
-Herdr y mosh se actualizan con Homebrew. `moshi-hook` prefiere su fórmula Homebrew cuando existe y, si no, usa su actualizador autónomo; después reinicia sólo su propio servicio si el CLI anuncia esa operación. Pi usa `pi update --self` y las extensiones `pi update --extensions`.
+Herdr, mosh, and `gentle-ai` update through Homebrew. `moshi-hook` prefers its Homebrew formula when available and otherwise uses its standalone updater; it then restarts only its own service when the CLI announces that operation. Pi uses `pi update --self`, and extensions use `pi update --extensions`.
 
-La actualización de Herdr **no reinicia nunca el servidor Herdr**: hacerlo cerraría pestañas activas. Tras actualizar el binario, el informe indica que el reinicio queda pendiente. Reinicie el LaunchAgent de Herdr manualmente y sólo cuando sea conveniente para las pestañas activas, siguiendo el procedimiento específico del host (por ejemplo, el servicio Homebrew o `dev.herdr.server`).
+A Herdr update **never restarts the Herdr server**: doing so would close active tabs. After updating its binary, the report states (`server restart pending`, in output and the log; there is no other notification) that restart is pending. Restart Herdr's LaunchAgent manually, only when appropriate for active tabs, using that host's procedure (for example, the Homebrew service or `dev.herdr.server`).

@@ -7,7 +7,7 @@
 Delega tareas al equipo que esté libre, aprovecha la potencia de cálculo que ya tienes
 y deja que cada agente trabaje con sus propias herramientas, sin compartir credenciales.
 
-[🇬🇧 English](README.md) · 🇪🇸 Español
+[🇬🇧 English (canonical)](README.md) · 🇪🇸 Español
 
 </div>
 
@@ -94,7 +94,7 @@ flowchart TB
 | `swarm-delegate` | Herramienta del orquestador: `list`, `self`, `preflight`, `submit`, `recover` y `close`. |
 | `swarm-herdr-task` | Adaptador del nodo: abre una pestaña y una sesión Pi propias, guarda el ledger y lee el resultado. |
 | `swarm-smb-mount` | Monta sólo el recurso compartido registrado, con las credenciales locales del nodo. |
-| `swarm-update` | Comprueba e instala actualizaciones de las herramientas, sin `sudo`. |
+| `swarm-update` | Comprueba e instala actualizaciones de Herdr, mosh, moshi-hook, gentle-ai, Pi y las extensiones de Pi, sin `sudo`. |
 | `skills/agent-swarm-remote` | Enseña a Pi y a Claude a delegar o recibir un sobre sin salirse del contrato. |
 
 Cada nodo tiene uno de dos roles: el **hub** publica el catálogo de proyectos por SMB y los **spokes** lo montan para trabajar sobre los mismos proyectos.
@@ -120,7 +120,7 @@ automation/agent-swarm/bin/swarm-setup add-host \
   --install-missing --no-auto-update
 ```
 
-Quita `--no-auto-update` si quieres la actualización diaria. Si el comando se detiene esperando una acción, hazla y **vuelve a ejecutar el mismo comando**: continúa desde la fase pendiente.
+Quita `--no-auto-update` si quieres la actualización diaria. Un nodo configurado antes de esa fase no tiene actualizador: ejecuta `automation/agent-swarm/bin/swarm-update install` en él. Herdr se actualiza pero su servidor nunca se reinicia; la ejecución sólo informa `server restart pending` en la salida de `swarm-update` y en `~/Library/Logs/mac-agent-swarm/swarm-update.log`, así que reinícialo tú cuando convenga. Si el comando se detiene esperando una acción, hazla y **vuelve a ejecutar el mismo comando**: continúa desde la fase pendiente.
 
 ```mermaid
 flowchart TD
@@ -146,7 +146,7 @@ automation/agent-swarm/bin/swarm-delegate preflight spoke-node
 # {"status": "ready", "target": "spoke-node"}
 ```
 
-Si un spoke responde `catalog_missing`, monta el catálogo antes de enviarle trabajo. La [guía de validación](docs/runbooks/agent-swarm/validation.md) reúne todas las comprobaciones.
+Si un spoke responde `catalog_missing`, monta el catálogo antes de enviarle trabajo. La [guía de validación](docs/es/runbooks/agent-swarm/validation.md) reúne todas las comprobaciones.
 
 ## 📦 Envía tu primera tarea
 
@@ -227,17 +227,19 @@ Si recibes `unknown`, vuelve a consultar con `recover` y el mismo UUID. Si no ca
 
 ## 📚 Documentación
 
+La documentación detallada en español está en `docs/es/`. La documentación canónica en inglés está en [`docs/`](docs/).
+
 | Si quieres... | Lee |
 | --- | --- |
-| Entender el diseño completo | [Arquitectura](docs/architecture.md) |
-| Incorporar un nodo paso a paso | [Instalación guiada](docs/setup/agent-guided-setup.md) y [Agregar un equipo](docs/setup/add-host.md) |
-| Conocer el contrato de tareas | [Tareas Herdr + Pi](docs/runbooks/agent-swarm/herdr-tasks.md) |
-| Comprobar un despliegue | [Validación](docs/runbooks/agent-swarm/validation.md) |
-| Revisar SSH o SMB | [Canal SSH](docs/runbooks/agent-swarm/ssh-channel.md) y [Montaje SMB](docs/runbooks/agent-swarm/smb-mount.md) |
-| Retirar un nodo | [Reversión](docs/runbooks/agent-swarm/rollback.md) |
-| Ver qué se probó y qué no | [Evidencia de pruebas](docs/runbooks/agent-swarm/test-evidence.md) |
+| Entender el diseño completo | [Arquitectura](docs/es/architecture.md) |
+| Incorporar un nodo paso a paso | [Instalación guiada](docs/es/setup/agent-guided-setup.md) y [Agregar un equipo](docs/es/setup/add-host.md) |
+| Conocer el contrato de tareas | [Tareas Herdr + Pi](docs/es/runbooks/agent-swarm/herdr-tasks.md) |
+| Comprobar un despliegue | [Validación](docs/es/runbooks/agent-swarm/validation.md) |
+| Revisar SSH o SMB | [Canal SSH](docs/es/runbooks/agent-swarm/ssh-channel.md) y [Montaje SMB](docs/es/runbooks/agent-swarm/smb-mount.md) |
+| Retirar un nodo | [Reversión](docs/es/runbooks/agent-swarm/rollback.md) |
+| Ver qué se probó y qué no | [Evidencia de pruebas](docs/es/runbooks/agent-swarm/test-evidence.md) |
 | Consultar las reglas del agente | [Skill remota](skills/agent-swarm-remote/SKILL.md) |
-| Leer el diseño de delegación por carga y MCP | [Diseño de la funcionalidad](docs/features/load-aware-delegation-mcp.md) |
+| Leer el diseño de delegación por carga y MCP | [Diseño de la funcionalidad](docs/es/features/load-aware-delegation-mcp.md) |
 
 ## 🗺️ TODO
 
@@ -249,7 +251,7 @@ Lo que todavía no está hecho y hacia dónde va el proyecto:
 - [ ] **Probar en Linux.** La delegación de tareas está pensada para ser portable, pero sólo se ha validado en macOS.
 - [ ] **Quitar la dependencia de macOS.** `swarm-smb-mount` y `swarm-update` usan launchd, Keychain y `osascript`, que sólo existen en macOS. Faltan alternativas para Linux, por ejemplo `mount.cifs` con un archivo de credenciales protegido y un timer de systemd.
 - [ ] **Alta automática en Linux.** `swarm-setup` aún asume las rutas y servicios de macOS.
-- [ ] **Posible carrera al arrancar Pi.** En una prueba real, la aceptación devolvió `unknown` porque la sesión de Pi se evaluó antes de estar lista; repetirla funcionó. Falta una prueba determinista que lo reproduzca antes de corregir el adaptador. Los detalles están en la [evidencia de pruebas](docs/runbooks/agent-swarm/test-evidence.md).
+- [ ] **Posible carrera al arrancar Pi.** En una prueba real, la aceptación devolvió `unknown` porque la sesión de Pi se evaluó antes de estar lista; repetirla funcionó. Falta una prueba determinista que lo reproduzca antes de corregir el adaptador. Los detalles están en la [evidencia de pruebas](docs/es/runbooks/agent-swarm/test-evidence.md).
 
 ## 🤝 Colaborar
 
