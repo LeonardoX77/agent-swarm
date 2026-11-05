@@ -230,8 +230,11 @@ class SetupTests(unittest.TestCase):
         self.assertIn(str(setup.home / ".local/bin") + ":" + str(pi.parent), path)
         self.assertIn(str(setup.home / ".hermes/node/bin"), path)
         self.assertTrue(path.endswith("/usr/bin:/bin:/usr/sbin:/sbin"))
-        self.assertEqual(setup.remote_tool("command -v pi").stdout, str(pi) + "\n")
-        self.assertEqual(setup.remote_tool("pi list").stdout, "gentle-pi\n")
+        # Restrict the lookup to the fake home directories so a host-installed pi (for example
+        # Homebrew's) cannot shadow the one under test.
+        home_path = ":".join(p for p in path.split(":") if p.startswith(str(setup.home)))
+        self.assertEqual(setup.remote_tool("PATH='%s' command -v pi" % home_path).stdout, str(pi) + "\n")
+        self.assertEqual(setup.remote_tool("PATH='%s' pi list" % home_path).stdout, "gentle-pi\n")
 
     def test_platform_specific_log_locations(self):
         for system, suffix in (("Linux", ".local/state/agent-swarm/logs"),

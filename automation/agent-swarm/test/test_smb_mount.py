@@ -247,7 +247,7 @@ class LinuxMountTests(unittest.TestCase):
         with patch.object(mount_tool.os, "getgid", return_value=502):
             code, response = self.run_tool("fstab-line")
         self.assertEqual(code, 0)
-        self.assertEqual(response["fstab_line"], "//host/projects /mnt/projects cifs credentials=%s/.config/agent-swarm/smb-credentials,uid=501,gid=502,vers=3.0,noauto,user,_netdev 0 0" % self.home)
+        self.assertEqual(response["fstab_line"], "//host/projects /mnt/projects cifs credentials=%s/.config/agent-swarm/smb-credentials,uid=501,gid=502,vers=3.0,noauto,user,_netdev 0 0" % self.home.resolve())
         self.assertEqual(response["credentials_template"], "username=leo\npassword=<your SMB password>\n")
         self.assertEqual(response["credentials_mode"], "0600")
         self.assertEqual(self.runner.calls, [])
