@@ -10,7 +10,15 @@ The onboarding path is `swarm-setup add-host` from an already registered macOS o
 4. Repeat the same command with the same options until bidirectional acceptance completes successfully.
 5. Before delegating work, run `swarm-delegate preflight <target>` and follow the [validation runbook](../runbooks/agent-swarm/validation.md).
 
-The registry is the source of truth. Its `hosts`, `share`, and role fields determine aliases, endpoints, users, catalog, repository, and paths. Do not replace them with machine names, IP addresses, or paths from another deployment.
+The registry is the source of truth. Its `hosts`, `share`, and role fields determine aliases, endpoints, users, catalog, repository, and paths. Do not replace them with machine names, IP addresses, or paths from another deployment. A host can additionally have ordered `fallback_addresses` for SSH and `share_hosts` for its SMB mount; both are optional, so existing registries remain valid.
+
+## Address candidates and failover
+
+Use `--address` for the preferred SSH address and repeat `--fallback-address` in order for later candidates. `--origin-address` similarly supplies the reverse alias only and replaces that alias's origin-registry candidates. A spoke can repeat `--share-host` for SMB hosts in preference order; a hub rejects that option. Candidates must begin alphanumerically, contain only letters, digits, dots, and hyphens, and contain no duplicates (nor may the primary address be a fallback).
+
+Use Tailscale MagicDNS first and LAN second. Tailscale itself uses LAN directly when possible, so the LAN candidate primarily protects against Tailscale being unavailable or against a route tool capturing a Tailscale sub-range (for example, Twingate routing `100.96.0.0/12` within `100.64.0.0/10`). On Windows/WSL, treat a LAN-scoped firewall rule carefully: a Public Wi-Fi profile can still use that LAN range.
+
+SSH tries candidates in order; an unreachable candidate adds at most its per-candidate connect timeout. SMB fallback is mount-time only: remount to change an active host.
 
 ## Linux/WSL before onboarding
 

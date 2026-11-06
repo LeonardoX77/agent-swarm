@@ -19,11 +19,13 @@ Install `cifs-utils` and make `findmnt`, `mount`, and `umount` available through
 automation/agent-swarm/bin/swarm-smb-mount fstab-line --host H --share S --user U
 ```
 
-The JSON includes `fstab_line`, `credentials_file`, `credentials_mode`, and `credentials_template`. A person must:
+On Linux, repeat `--host` in preference order to configure mount-time fallback. The JSON includes `fstab_line` (the first line), `fstab_lines` (one line per candidate), `credentials_file`, `credentials_mode`, and `credentials_template`. A person must:
 
 1. As root, create `/mnt/<share>` and add the exact line to `/etc/fstab`. It includes `cifs`, the absolute credentials path, local uid/gid, and `vers=3.0,noauto,user,_netdev`; do not invent it or copy it from another account.
 2. Personally create `~/.config/agent-swarm/smb-credentials` with mode `0600`, using the `username=...` / `password=...` template. Do not give the password to the agent or include it in commands or shared logs. The tool never creates or reads that file directly: the system CIFS mount uses it.
 3. Run `mount` as a normal user with the options in the next section. Without a user-mountable fstab entry, a new mount fails safely with `fstab_entry_required`.
+
+Fallback happens only at mount time: a mounted share does not switch hosts live, so unmount and remount to select another candidate. With several hosts, `status` reports `active_host`. The selection of an fstab entry by source (`mount //HOST/SHARE`) when several entries share one mount point has not yet been verified on real Linux.
 
 The Linux catalog is at `/mnt/<share>`; macOS retains `/Volumes/<share>`. A Linux hub must publish its catalog manually through its own SMB server (for example, Samba); setup does not configure that server. In WSL, Windows can occupy TCP 445 on loopback: a local test needs another port (the recorded test used `port=1445` in fstab). This CLI has no port option. Servers that require SMB 3.1.1 have not been validated; the generated line uses `vers=3.0`.
 
@@ -36,6 +38,8 @@ automation/agent-swarm/bin/swarm-smb-mount status --host <share.host> --share <s
 automation/agent-swarm/bin/swarm-smb-mount mount --host <share.host> --share <share.name> --user <share.user>
 automation/agent-swarm/bin/swarm-smb-mount unmount --host <share.host> --share <share.name> --user <share.user>
 ```
+
+Linux accepts repeated `--host` values in preference order for all four commands. macOS accepts exactly one `--host`; multiple values are rejected.
 
 Output is JSON. `mount` is idempotent: it reports the already-mounted point. macOS identifies the origin `//<share.user>@<share.host>/<share.name>`; Linux identifies the CIFS mount by host and share, not user. `unmount` uses that same identification. It does not unmount shares from another host or with another name. If macOS selects `/Volumes/<share.name>-1` instead of the expected point, output includes `unexpected_mount_point`: inspect what occupies the original point before acting.
 

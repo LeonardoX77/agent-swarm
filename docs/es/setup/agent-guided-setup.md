@@ -10,7 +10,15 @@ La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya reg
 4. Repita el mismo comando con las mismas opciones hasta que la aceptación bidireccional termine correctamente.
 5. Antes de delegar trabajo, ejecute `swarm-delegate preflight <destino>` y siga el [runbook de validación](../runbooks/agent-swarm/validation.md).
 
-El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determinan alias, endpoints, usuarios, catálogo, repositorio y rutas. No reemplace esos datos por nombres de equipos, IPs o rutas de otro despliegue.
+El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determinan alias, endpoints, usuarios, catálogo, repositorio y rutas. No reemplace esos datos por nombres de equipos, IPs o rutas de otro despliegue. Un host puede tener además `fallback_addresses` ordenadas para SSH y `share_hosts` para su montaje SMB; ambas son opcionales, por lo que los registros existentes siguen siendo válidos.
+
+## Candidatos de dirección y failover
+
+Use `--address` para la dirección SSH preferida y repita `--fallback-address` en orden para los candidatos posteriores. `--origin-address` proporciona de igual modo sólo el alias inverso y sustituye los candidatos del registro del origen para ese alias. Un spoke puede repetir `--share-host` para hosts SMB en orden de preferencia; un hub rechaza esa opción. Los candidatos deben empezar por un carácter alfanumérico, contener sólo letras, dígitos, puntos y guiones, y no contener duplicados (ni puede la dirección principal ser un fallback).
+
+Use MagicDNS de Tailscale primero y LAN después. Tailscale usa la LAN directamente cuando puede, así que el candidato LAN protege principalmente frente a que Tailscale no esté disponible o a que una herramienta de rutas capture un subrango de Tailscale (por ejemplo, Twingate al enrutar `100.96.0.0/12` dentro de `100.64.0.0/10`). En Windows/WSL, trate con cuidado una regla de firewall limitada a la LAN: un perfil Wi-Fi Público puede seguir usando ese rango LAN.
+
+SSH prueba los candidatos en orden; un candidato inalcanzable añade como máximo su timeout de conexión por candidato. El fallback SMB ocurre sólo durante el montaje: vuelva a montar para cambiar el host activo.
 
 ## Linux/WSL antes del alta
 

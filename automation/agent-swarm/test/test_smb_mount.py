@@ -1,5 +1,7 @@
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import plistlib
@@ -210,7 +212,8 @@ class LinuxMountTests(unittest.TestCase):
 
     def run_tool(self, command, results=(), *options):
         self.runner = Runner(results)
-        return mount_tool.run([command, "--host", "host", "--share", "projects", "--user", "leo", *options], runner=self.runner, home=self.home, uid=501)
+        host_options = [] if "--host" in options else ["--host", "host"]
+        return mount_tool.run([command, *host_options, "--share", "projects", "--user", "leo", *options], runner=self.runner, home=self.home, uid=501)
 
     def test_status_matches_host_case_insensitively_but_exact_share(self):
         for source, mounted in ((self.mounted, True), ("//host/projects-other /mnt/other\n", False), ("//other/projects /mnt/projects\n", False)):
@@ -247,7 +250,7 @@ class LinuxMountTests(unittest.TestCase):
         with patch.object(mount_tool.os, "getgid", return_value=502):
             code, response = self.run_tool("fstab-line")
         self.assertEqual(code, 0)
-        self.assertEqual(response["fstab_line"], "//host/projects /mnt/projects cifs credentials=%s/.config/agent-swarm/smb-credentials,uid=501,gid=502,vers=3.0,noauto,user,_netdev 0 0" % self.home)
+        self.assertEqual(response["fstab_line"], "//host/projects /mnt/projects cifs credentials=%s/.config/agent-swarm/smb-credentials,uid=501,gid=502,vers=3.0,noauto,user,_netdev 0 0" % self.home.resolve())
         self.assertEqual(response["credentials_template"], "username=leo\npassword=<your SMB password>\n")
         self.assertEqual(response["credentials_mode"], "0600")
         self.assertEqual(self.runner.calls, [])
@@ -325,6 +328,81 @@ class LinuxMountTests(unittest.TestCase):
         self.assertIn("systemctl --user", response["warning"])
         self.assertFalse((self.home / ".config/agent-swarm/smb-credentials").exists())
         self.assertFalse(any("sudo" in argv for argv, _ in self.runner.calls))
+
+    def test_single_host_commands_keep_existing_responses(self):
+        code, response = self.run_tool("status", [Result(stdout=self.mounted)])
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "mount_point": "/mnt/projects"}))
+        code, response = self.run_tool("fstab-line")
+        self.assertEqual(code, 0)
+        self.assertEqual(response["fstab_lines"], [response["fstab_line"]])
+        code, response = self.run_tool("unmount", [Result(stdout=self.mounted), Result()])
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "unmounted": True}))
+        code, response = self.run_tool("mount", [Result(stdout=self.mounted)])
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "mount_point": "/mnt/projects", "via": "already_mounted"}))
+
+    def test_status_accepts_candidates_and_reports_active_host(self):
+        code, response = self.run_tool("status", [Result(stdout="//LAN/projects /mnt/projects\n")], "--host", "tailscale", "--host", "lan")
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "mount_point": "/mnt/projects", "active_host": "lan"}))
+
+    def test_mount_falls_back_by_source_and_reports_all_failures(self):
+        fstab_tailscale = self.fstab.replace("//host/", "//tailscale/")
+        fstab_lan = self.fstab.replace("//host/", "//lan/")
+        code, response = self.run_tool("mount", [
+            Result(), Result(stdout=fstab_tailscale), Result(1, stderr="tailscale down"),
+            Result(stdout=fstab_lan), Result(), Result(stdout="//lan/projects /mnt/projects\n"),
+        ], "--host", "tailscale", "--host", "lan")
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "mount_point": "/mnt/projects", "via": "mount"}))
+        self.assertEqual(self.runner.calls[2][0], ["mount", "//tailscale/projects"])
+        self.assertEqual(self.runner.calls[4][0], ["mount", "//lan/projects"])
+        code, response = self.run_tool("mount", [
+            Result(), Result(stdout=fstab_tailscale), Result(1, stderr="tailscale down"),
+            Result(stdout=fstab_lan), Result(1, stderr="lan down"), Result(stdout=""),
+        ], "--host", "tailscale", "--host", "lan")
+        self.assertEqual(code, 2)
+        self.assertEqual(response, {"ok": False, "error": "mount_failed", "message": "tailscale: tailscale down; lan: lan down"})
+
+    def test_unmount_only_actively_mounted_candidate(self):
+        code, response = self.run_tool("unmount", [Result(stdout="//tailscale/projects /mnt/projects\n"), Result()], "--host", "tailscale", "--host", "lan")
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": True, "unmounted": True}))
+        self.assertEqual(self.runner.calls[1][0], ["umount", "/mnt/projects"])
+        code, response = self.run_tool("unmount", [Result(stdout="//other/projects /mnt/projects\n")], "--host", "tailscale", "--host", "lan")
+        self.assertEqual((code, response), (0, {"ok": True, "mounted": False, "unmounted": False}))
+        self.assertEqual(len(self.runner.calls), 1)
+
+    def test_fstab_line_returns_candidates_in_preference_order(self):
+        code, response = self.run_tool("fstab-line", (), "--host", "tailscale", "--host", "lan")
+        self.assertEqual(code, 0)
+        self.assertEqual(response["fstab_lines"], [
+            response["fstab_line"],
+            response["fstab_line"].replace("//tailscale/", "//lan/"),
+        ])
+
+    def test_persistence_passes_all_hosts_with_existing_quoting(self):
+        self.home = Path(self.directory.name) / "space % $ home"
+        code, response = self.run_tool("mount", [Result(stdout="//lan/projects /mnt/projects\n"), Result(), Result(), Result()], "--persistent", "--host", "tailscale", "--host", "lan")
+        self.assertEqual(code, 0)
+        text = Path(response["service"]).read_text()
+        self.assertIn('mount --host tailscale --host lan --share projects --user leo', text)
+
+
+@patch.object(mount_tool.sys, "platform", "darwin")
+class MultipleHostMacOSTests(unittest.TestCase):
+    def test_multiple_hosts_are_rejected_without_side_effects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            for command in ("status", "mount", "unmount", "fstab-line"):
+                with self.subTest(command=command):
+                    runner = Runner()
+                    code, response = mount_tool.run([command, "--host", "first", "--host", "second", "--share", "projects", "--user", "leo"], runner=runner, home=home, uid=501)
+                    self.assertEqual((code, response), (2, {"ok": False, "error": "invalid_arguments", "message": "multiple --host values are only supported on Linux"}))
+                    self.assertEqual(runner.calls, [])
+                    self.assertEqual(list(home.iterdir()), [])
+
+    def test_host_help_describes_repeatable_candidates(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+            mount_tool.build_parser().parse_args(["status", "--help"])
+        self.assertIn("repeat in preference order", output.getvalue())
 
 
 if __name__ == "__main__":

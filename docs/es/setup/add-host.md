@@ -20,7 +20,28 @@ automation/agent-swarm/bin/swarm-setup add-host \
   [--update-time 04:30 | --no-auto-update] [--verbose]
 ```
 
-El valor predeterminado instala la actualización diaria a las `04:30`; use `--no-auto-update` si no quiere activar ese calendario. Esto no instala un chequeo de actualizaciones al primer uso remoto: es una funcionalidad distinta. Agent Swarm no gestiona ni garantiza los avisos de paquetes que pueda mostrar Pi al iniciarse. `--install-missing` aprovecha las herramientas ya instaladas y sólo intenta añadir Herdr, gentle-pi y la integración oficial de Herdr para Pi cuando sus CLI base están disponibles: no reinstala todo el Mac. El proceso muestra un resumen breve en inglés; por ejemplo:
+El valor predeterminado instala la actualización diaria a las `04:30`; use `--no-auto-update` si no quiere activar ese calendario. Esto no instala una comprobación de actualizaciones en el primer uso remoto: es una función distinta. Agent Swarm no gestiona ni garantiza los avisos de paquetes que pueda mostrar Pi al iniciarse. `--install-missing` usa las herramientas existentes e intenta añadir sólo Herdr, gentle-pi y la integración oficial de Herdr para Pi cuando sus CLI base están disponibles; no reinstala todo el Mac.
+
+### Candidatos de dirección y ejemplo WSL
+
+`--address` es el primer candidato de dirección SSH. Añada `--fallback-address ADDR` repetidamente, en orden de preferencia, para candidatos posteriores. `--origin-address ADDR` también es repetible, pero se aplica sólo en la dirección inversa: sustituye la dirección del registro del origen y cualquier `fallback_addresses` para ese alias inverso. Para un `spoke`, `--share-host HOST` puede repetirse para establecer hosts SMB ordenados; se rechaza en un `hub`.
+
+Cada dirección o host de recurso debe comenzar por un carácter alfanumérico y contener después sólo letras, dígitos, puntos o guiones. Se rechazan los valores duplicados de fallback, origen o share-host; la dirección principal de `--address` tampoco puede ser un fallback.
+
+Para un nodo WSL, priorice su nombre MagicDNS de Tailscale y use su dirección LAN en segundo lugar. Por ejemplo:
+
+```sh
+automation/agent-swarm/bin/swarm-setup add-host \
+  --name wsl-leo --user <user> \
+  --address 5cg6031yzw.tail3eebf8.ts.net \
+  --fallback-address 192.168.0.21 --ssh-port 2222 \
+  --origin-address macbookleo.tail3eebf8.ts.net \
+  --origin-address 192.168.0.10 \
+  --share-host macbookleo.tail3eebf8.ts.net \
+  --share-host 192.168.0.10
+```
+
+Tailscale ya usa la LAN directamente cuando puede, de modo que el candidato LAN cubre sobre todo que Tailscale esté caído. Las herramientas de enrutamiento también pueden capturar peers de Tailscale; por ejemplo, una ruta de Twingate para `100.96.0.0/12` captura parte del rango `100.64.0.0/10` de Tailscale y puede romper esa ruta. El fallback LAN cubre ese caso. En Windows/WSL, un perfil Wi-Fi puede ser Público, por lo que una regla de firewall limitada al rango LAN también se aplica en redes públicas que usan ese rango. El proceso muestra un resumen breve en inglés; por ejemplo:
 
 ```text
 [ 1/10] local-preflight OK       origin preflight passed
@@ -33,27 +54,13 @@ Al completar con éxito termina con salida `0`. Revise la entrada que el setup a
 
 > Si se interrumpe o espera a una persona, ejecute **el mismo comando con las mismas opciones** otra vez desde el origen. Comprueba de nuevo cada fase y conserva lo ya configurado; no genere otra huella ni acepte una distinta sin verificarla localmente.
 
-## Runtime prerequisites (macOS and Linux)
+## Requisitos de runtime (macOS y Linux)
 
-The official Herdr Pi integration is required, not just gentle-pi. Check it with
-`herdr integration status` (`pi: not installed` is not ready), or install it with
-`herdr integration install pi`. It installs `~/.pi/agent/extensions/herdr-agent-state.ts`.
-The adapter proves ownership through `agent_session` (kind `path`, source `herdr:pi`);
-without that integration, submit can return `unknown` without delivering the prompt.
-`--install-missing` installs it when herdr is available and reports
-`installed herdr pi integration`; dry-run only reports the planned install.
+La integración oficial de Herdr para Pi es obligatoria, no basta con gentle-pi. Compruébela con `herdr integration status` (`pi: not installed` no está listo), o instálela con `herdr integration install pi`. Instala `~/.pi/agent/extensions/herdr-agent-state.ts`. El adaptador prueba la propiedad mediante `agent_session` (tipo `path`, origen `herdr:pi`); sin esa integración, `submit` puede devolver `unknown` sin entregar el prompt. `--install-missing` la instala cuando herdr está disponible e informa `installed herdr pi integration`; el modo dry-run sólo informa de la instalación prevista.
 
-On headless Linux, start the server by running `herdr` in a normal terminal and
-then detaching, or use a pty with a non-zero grid (rows and columns). Herdr 0.9.5
-rejects a zero-sized terminal with `cannot attach without a usable terminal: terminal reported a zero-sized grid`.
-The server survives the client exiting. There is no `herdr server start` command
-in that version (`server` only offers `stop` and `reload-config`). Check readiness
-with `herdr tab list`; `server_not_running` means the server still needs starting.
-The setup never starts or restarts it automatically.
+En Linux sin interfaz gráfica, inicie el servidor ejecutando `herdr` en una terminal normal y desacoplando después el cliente, o use una pty con una cuadrícula de filas y columnas distinta de cero. Herdr 0.9.5 rechaza una terminal de tamaño cero con `cannot attach without a usable terminal: terminal reported a zero-sized grid`. El servidor sobrevive a la salida del cliente. En esa versión no existe el comando `herdr server start` (`server` sólo ofrece `stop` y `reload-config`). Compruebe la disponibilidad con `herdr tab list`; `server_not_running` significa que el servidor aún debe iniciarse. El setup nunca lo inicia ni lo reinicia automáticamente.
 
-Both setup and swarm-update discover `$HOME/.pi/agent/bin` (Pi's own installer),
-immediately after `$HOME/.local/bin`, retaining the existing Homebrew, nvm,
-Hermes and system directories and their order. No interactive shell profile is needed.
+Tanto setup como swarm-update detectan `$HOME/.pi/agent/bin` (el instalador propio de Pi) inmediatamente después de `$HOME/.local/bin`, y conservan los directorios existentes de Homebrew, nvm, Hermes y del sistema, así como su orden. No se necesita un perfil de shell interactivo.
 
 ## Linux/WSL: preparación
 
@@ -61,7 +68,7 @@ Active SSH y prepare Node, Python 3 y Pi en el destino, con login de Pi local y 
 
 En WSL, Windows OpenSSH suele ocupar el puerto 22: si el `sshd` de WSL escucha, por ejemplo, en `127.0.0.1:2222`, use `--address 127.0.0.1 --ssh-port 2222` desde un origen que pueda alcanzar esa dirección. Use `--origin-ssh-port 2222` si el destino debe volver al origen por ese puerto. Ambos valores predeterminados son 22. El alias de SSH config lleva el puerto (`Port` sólo si no es 22); el esquema del registro no cambia. Reanude con los mismos puertos: cambiarlos provoca un error de conflicto de alias, nunca una sobrescritura silenciosa.
 
-Para un spoke, prepare el acceso CIFS siguiendo [Montaje SMB](../runbooks/agent-swarm/smb-mount.md#linuxwsl-preparación): `swarm-smb-mount fstab-line --host H --share S --user U` imprime la línea exacta y la plantilla de credenciales. Una persona añade la línea a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup ejecuta el montaje y activa un timer de usuario cada 300 s; si `systemctl --user` no está disponible, el montaje puede funcionar pero la persistencia se degrada con una advertencia.
+Para un spoke, prepare el acceso CIFS siguiendo [Montaje SMB](../runbooks/agent-swarm/smb-mount.md#linuxwsl-preparación): `swarm-smb-mount fstab-line --host H --share S --user U` imprime la línea exacta y la plantilla de credenciales. En Linux, repita `--host` en orden de preferencia al usar candidatos SMB; `fstab-line` devuelve `fstab_lines`, una línea fstab por host. La elección de fallback ocurre sólo al montar: un recurso ya montado no cambia de host en vivo, así que vuelva a montarlo para cambiarlo. El estado informa del candidato activo. La selección de una entrada fstab por origen (`mount //HOST/SHARE`) cuando varias entradas usan el mismo punto de montaje aún no se ha verificado en Linux real. Una persona añade la línea a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup ejecuta el montaje y activa un timer de usuario cada 300 s; si `systemctl --user` no está disponible, el montaje puede funcionar pero la persistencia se degrada con una advertencia.
 
 El catálogo del spoke es `/mnt/<share>` (macOS: `/Volumes/<share>`). El registro conserva la ruta del proyecto relativa al catálogo del origen: por ejemplo, `/srv/projects/agent-swarm` bajo `/srv/projects` pasa a `/mnt/shared-projects/agent-swarm`. El registro usa `gui_cwd` = `$HOME/tmp` del destino y crea ese directorio; los prefijos de hostname se comparan sin distinguir mayúsculas. `swarm-delegate` prefiere `/usr/bin/python3` y, si no es ejecutable, resuelve `python3` en el `PATH` del registro.
 
@@ -167,6 +174,9 @@ En Linux, siga la preparación CIFS anterior y ejecute el comando de montaje que
 | `--origin-user USER` | Cuenta que usará el canal inverso hacia el origen. |
 | `--ssh-port PORT` | Puerto del sshd del destino; entero de 1 a 65535, predeterminado 22. |
 | `--origin-ssh-port PORT` | Puerto del sshd del origen al que se conecta el destino; entero de 1 a 65535, predeterminado 22. |
+| `--fallback-address ADDR` | Candidato SSH repetible después de `--address`, en orden. |
+| `--origin-address ADDR` | Candidato SSH repetible para el alias inverso; sustituye los candidatos del registro del origen sólo para ese alias. |
+| `--share-host HOST` | Host SMB ordenado y repetible para un `spoke`; se rechaza para un `hub`. |
 | `--install-missing` | Herdr: Homebrew en macOS o instalador oficial vía curl en Linux; gentle-pi: mediante Pi; integración Pi: `herdr integration install pi`, en ambas plataformas. |
 | `--auto-update` / `--no-auto-update` | Activa (predeterminado) u omite el calendario diario: launchd en macOS, systemd de usuario en Linux. |
 | `--update-time HH:MM` | Hora diaria en ambas plataformas; el predeterminado es `04:30`. |
@@ -187,7 +197,9 @@ automation/agent-swarm/bin/swarm-setup status --name <name>
 
 El estado está en `~/.local/state/agent-swarm/setup/<name>.json`. El log está en `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log` para un origen macOS y en `~/.local/state/agent-swarm/logs/swarm-setup-<name>.log` para un origen Linux/WSL. Ante un error inesperado, consulte ese log y, si hace falta, reanude con `--verbose` y las mismas opciones; comparta sólo diagnóstico saneado, pues los logs pueden incluir claves **públicas**, rutas y nombres de usuario. La salida normal es resumida en inglés; `--verbose` registra cada comando, código de salida y salida recortada. Si el setup termina con salida `0`, confirme además `automation/agent-swarm/bin/swarm-delegate preflight <name>`: debe devolver `"status": "ready"`. No confunda el estado `WAITING` ni un éxito parcial de SSH con la aceptación final.
 
-Volver a ejecutar el comando contra un host ya configurado es seguro: las fases que ya cumplen su condición informan `OK` y no cambian configuración. Un nombre existente con otra dirección, una huella distinta o un alias SSH diferente falla en vez de sobrescribirlo.
+Volver a ejecutar el comando contra un host ya configurado es seguro: las fases que ya cumplen su condición informan `OK` y no cambian configuración. Un nombre existente con otra dirección, huella, lista de candidatos o alias SSH diferente falla en vez de sobrescribirlo.
+
+El registro acepta las claves de host opcionales y ordenadas `fallback_addresses` y `share_hosts`. `fallback_addresses` aporta candidatos SSH después de `address`; `share_hosts` aporta hosts SMB para ese spoke y, si falta, SMB usa el `share.host` global. Los registros sin ninguna de esas claves opcionales siguen siendo válidos.
 
 ## Procedimiento manual (referencia)
 

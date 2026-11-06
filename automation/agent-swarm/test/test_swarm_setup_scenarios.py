@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "lib"))
-from swarm_setup import Setup, SetupError
+from swarm_setup import Setup, SetupError, Waiting
 from herdr_task import TaskError, _envelope
 from host_registry import HostRegistry
 
@@ -238,6 +238,83 @@ class SetupScenarioTests(unittest.TestCase):
             self.assertEqual(registry_path.read_bytes(), registry_before)
             self.assertEqual(json.loads(first.state_path.read_text())["origin_ssh_port"], 2200)
 
+    def test_multi_candidate_aliases_install_helpers_in_both_directions(self):
+        machines, setup, registry_path = self.run_zero_to_done(fallback_addresses=["192.168.1.20"],
+                                                                 origin_addresses=["Origin.local", "100.64.0.1"])
+        origin_config = (machines.origin_home / ".ssh/config").read_text()
+        remote_config = (machines.remote_home / ".ssh/config").read_text()
+        for config, alias, candidates in ((origin_config, "bea", "Bea.local 192.168.1.20"),
+                                          (remote_config, "origin", "Origin.local 100.64.0.1")):
+            self.assertIn("Host swarm-" + alias + "\n  HostKeyAlias swarm-" + alias, config)
+            self.assertIn("--port 22 -- " + candidates, config)
+            self.assertNotIn("HostName " + candidates.split()[0], config)
+        self.assertEqual((machines.origin_home / ".ssh/known_hosts").read_bytes(), b"swarm-bea ssh-ed25519 NEWKEY\n")
+        self.assertEqual((machines.remote_home / ".ssh/known_hosts").read_bytes(), b"swarm-origin ssh-ed25519 ORIGINKEY\n")
+        helper = ".local/agent-swarm/bin/swarm-ssh-connect"
+        self.assertTrue((machines.origin_home / helper).is_file())
+        self.assertTrue((machines.remote_home / helper).is_file())
+
+    def test_reverse_alias_uses_origin_registry_fallback_addresses(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        registry_path = machines.origin_home / "hosts.json"
+        registry = {"version": 1, "hub": "origin", "share": {"host": "Origin.local", "name": "projects", "user": "leo"}, "hosts": {"origin": {"hostname_prefix": "Origin", "role": "hub", "ssh_alias": "swarm-origin", "address": "Origin.local", "fallback_addresses": ["100.64.0.1"], "catalog_root": "/catalog", "repo": "/catalog/leo/mac-agent-swarm", "path": "/usr/bin:/bin", "gui_cwd": "/Users/leo/tmp", "runtimes": ["pi"]}}}
+        registry_path.write_text(json.dumps(registry))
+        setup, _ = self.make_setup(machines, registry_path)
+        self.assertEqual(setup.run(), 0, setup.output.getvalue())
+        config = (machines.remote_home / ".ssh/config").read_text()
+        self.assertIn("HostKeyAlias swarm-origin", config)
+        self.assertIn("--port 22 -- Origin.local 100.64.0.1", config)
+        self.assertTrue((machines.remote_home / ".local/agent-swarm/bin/swarm-ssh-connect").is_file())
+
+    def test_candidate_reruns_are_idempotent_but_changed_candidates_conflict_without_writes(self):
+        machines, first, registry_path = self.run_zero_to_done(fallback_addresses=["192.168.1.20"])
+        origin_before, remote_before = self.snapshot(machines.origin_home), self.snapshot(machines.remote_home)
+        registry_before = registry_path.read_bytes()
+        rerun, _ = self.make_setup(machines, registry_path, fallback_addresses=["192.168.1.20"])
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertEqual(rerun.changed, [])
+        self.assertEqual(remote_before, self.snapshot(machines.remote_home))
+        for fallback in (["192.168.1.20", "100.64.0.2"], ["100.64.0.2", "192.168.1.20"]):
+            with self.subTest(fallback=fallback):
+                alias_before = (machines.origin_home / ".ssh/config").read_bytes()
+                known_before = (machines.origin_home / ".ssh/known_hosts").read_bytes()
+                registry_before = registry_path.read_bytes()
+                state_before = first.state_path.read_bytes()
+                rejected, _ = self.make_setup(machines, registry_path, fallback_addresses=fallback)
+                self.assertEqual(rejected.run(), 1)
+                self.assertIn("SSH alias conflict", rejected.output.getvalue())
+                self.assertEqual((machines.origin_home / ".ssh/config").read_bytes(), alias_before)
+                self.assertEqual((machines.origin_home / ".ssh/known_hosts").read_bytes(), known_before)
+                self.assertEqual(registry_path.read_bytes(), registry_before)
+                self.assertEqual(first.state_path.read_bytes(), state_before)
+
+    def test_multi_candidate_reverse_stale_alias_known_host_fails_closed_without_writes(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        setup, registry_path = self.make_setup(machines, origin_addresses=["Origin.local", "100.64.0.1"])
+        setup.local_preflight()
+        ssh = machines.remote_home / ".ssh"; ssh.mkdir()
+        known = ssh / "known_hosts"
+        known.write_text("swarm-origin ssh-ed25519 OLDKEY\nuser-entry ssh-ed25519 KEEP\n")
+        known_before = known.read_bytes(); registry_before = registry_path.read_bytes()
+        with self.assertRaisesRegex(SetupError, "swarm-origin.*verify and remove.*stale"):
+            setup.ssh_to_origin()
+        self.assertEqual(known.read_bytes(), known_before)
+        self.assertFalse((ssh / "config").exists())
+        self.assertEqual(registry_path.read_bytes(), registry_before)
+        self.assertFalse(setup.state_path.exists())
+        self.assertEqual(setup.results, [])
+
+    def test_multi_candidate_reverse_identical_alias_known_host_is_not_duplicated(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        setup, _ = self.make_setup(machines, origin_addresses=["Origin.local", "100.64.0.1"])
+        setup.local_preflight()
+        ssh = machines.remote_home / ".ssh"; ssh.mkdir()
+        known = ssh / "known_hosts"
+        known.write_text("swarm-origin ssh-ed25519 ORIGINKEY\nuser-entry ssh-ed25519 KEEP\n")
+        self.assertEqual(setup.ssh_to_origin(), ("changed", "configured reverse SSH channel"))
+        self.assertEqual(known.read_text().count("swarm-origin ssh-ed25519 ORIGINKEY\n"), 1)
+        self.assertIn("user-entry ssh-ed25519 KEEP\n", known.read_text())
+
     def test_reverse_alias_port_conflict_without_saved_state(self):
         machines, first, registry_path = self.run_zero_to_done()
         before = self.snapshot(machines.remote_home)
@@ -268,6 +345,36 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertEqual(registry_path.read_bytes(), before)
         self.assertEqual(len(machines.update_calls), 1)
         self.assertEqual(machines.keychain_polls, 1)
+
+    def test_mount_passes_share_hosts_in_order_and_prints_every_fstab_line(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.system = "Linux"; machines.keychain_after = 99
+        original = machines._remote
+        def remote(command, program):
+            if "swarm-smb-mount fstab-line" in command:
+                machines.remote_commands.append(command)
+                return Result(0, json.dumps({"fstab_lines": ["FIRST FSTAB LINE", "SECOND FSTAB LINE"],
+                                             "credentials_template": "username=leo\npassword=<your SMB password>\n"}))
+            return original(command, program)
+        machines._remote = remote
+        setup, _ = self.make_setup(machines, no_wait=True, share_hosts=["smb.tail", "192.168.1.2"])
+        setup.local_preflight()
+        with self.assertRaises(Waiting) as raised: setup.mount()
+        message = str(raised.exception)
+        self.assertIn("FIRST FSTAB LINE\nSECOND FSTAB LINE", message)
+        calls = [command for command in machines.remote_commands if "swarm-smb-mount " in command]
+        self.assertEqual(len(calls), 3)
+        for command in calls:
+            self.assertIn("--host smb.tail --host 192.168.1.2", command)
+
+    def test_mount_uses_global_share_host_when_no_share_hosts_are_given(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.mounted = True
+        setup, _ = self.make_setup(machines)
+        self.assertEqual(setup.mount(), ("ok", "catalog already mounted"))
+        status = next(command for command in machines.remote_commands if "swarm-smb-mount status" in command)
+        self.assertIn("--host Origin.local", status)
+        self.assertNotIn("--host Origin.local --host", status)
 
     def test_mount_warning_is_visible_directly_and_after_human_step(self):
         warning = "systemctl --user is unavailable; mount persistence was not enabled"

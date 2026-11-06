@@ -225,6 +225,10 @@ class SMBMount:
 class LinuxSMBMount(SMBMount):
     """Unprivileged Linux backend; fstab and credentials remain human-owned."""
     @staticmethod
+    def _hosts(hosts):
+        return [hosts] if isinstance(hosts, str) else hosts
+
+    @staticmethod
     def _source_matches(source, host, share):
         return source.lower().startswith("//" + host.lower() + "/") and source.split("/", 3)[-1] == share
 
@@ -232,21 +236,39 @@ class LinuxSMBMount(SMBMount):
     def _unescape(value):
         return re.sub(r"\\(?:x([0-9a-fA-F]{2})|([0-7]{3}))", lambda m: chr(int(m[1], 16) if m[1] else int(m[2], 8)), value)
 
-    def _mount_point(self, host, share, user):
+    def _active_mount(self, hosts, share, user):
         result = self._run(["findmnt", "-rn", "-t", "cifs", "-o", "SOURCE,TARGET"])
         # findmnt exits 1 when there are no matching filesystems.
         if result.returncode not in (0, 1):
             raise ToolError("mount_table_error", "Could not read the CIFS mount table")
         for line in result.stdout.splitlines():
             fields = line.split()
-            if len(fields) == 2 and self._source_matches(self._unescape(fields[0]), host, share):
-                return self._unescape(fields[1])
-        return None
+            if len(fields) == 2:
+                source, point = self._unescape(fields[0]), self._unescape(fields[1])
+                for host in self._hosts(hosts):
+                    if self._source_matches(source, host, share):
+                        return host, point
+        return None, None
 
-    def fstab_line(self, host, share, user):
+    def _mount_point(self, hosts, share, user):
+        return self._active_mount(hosts, share, user)[1]
+
+    def status(self, hosts, share, user):
+        hosts = self._hosts(hosts)
+        active_host, point = self._active_mount(hosts, share, user)
+        if point is None:
+            return {"ok": True, "mounted": False}
+        response = {"ok": True, "mounted": True, "mount_point": point}
+        if len(hosts) > 1:
+            response["active_host"] = active_host
+        return response
+
+    def fstab_line(self, hosts, share, user):
+        hosts = self._hosts(hosts)
         credentials = str(self.home.resolve() / ".config/agent-swarm/smb-credentials")
         escaped = credentials.replace("\\", "\\134").replace(" ", "\\040").replace("\t", "\\011")
-        return {"ok": True, "fstab_line": "//%s/%s /mnt/%s cifs credentials=%s,uid=%s,gid=%s,vers=3.0,noauto,user,_netdev 0 0" % (host, share, share, escaped, self.uid, os.getgid()),
+        lines = ["//%s/%s /mnt/%s cifs credentials=%s,uid=%s,gid=%s,vers=3.0,noauto,user,_netdev 0 0" % (host, share, share, escaped, self.uid, os.getgid()) for host in hosts]
+        return {"ok": True, "fstab_line": lines[0], "fstab_lines": lines,
                 "credentials_file": credentials, "credentials_mode": "0600",
                 "credentials_template": "username=%s\npassword=<your SMB password>\n" % user,
                 "message": "As root, add fstab_line to /etc/fstab and create /mnt/%s. Create credentials_file yourself with mode 0600; the tool never writes it." % share}
@@ -277,7 +299,9 @@ class LinuxSMBMount(SMBMount):
         value = str(path)
         return "append:" + value if re.fullmatch(r"/[A-Za-z0-9/._-]+", value) else "journal"
 
-    def _install_persistent(self, host, share, user):
+    def _install_persistent(self, hosts, share, user):
+        hosts = self._hosts(hosts)
+        host = hosts[0]
         try:
             result = self._run(["systemctl", "--user", "show-environment"])
             if result.returncode:
@@ -291,9 +315,10 @@ class LinuxSMBMount(SMBMount):
         service.parent.mkdir(parents=True, exist_ok=True)
         logs = self.home / ".local/state/agent-swarm/logs"
         logs.mkdir(parents=True, exist_ok=True)
+        arguments = ["mount"] + [value for candidate in hosts for value in ("--host", candidate)] + ["--share", share, "--user", user]
         command = self._unit_quote(local, executable=True) + " " + " ".join(
             self._unit_quote(arg) if not re.fullmatch(r"[A-Za-z0-9._-]+", arg) else arg
-            for arg in ("mount", "--host", host, "--share", share, "--user", user))
+            for arg in arguments)
         data = ("[Unit]\nDescription=Agent Swarm SMB mount\n[Service]\nType=oneshot\nExecStart=%s\n"
                 "StandardOutput=%s\nStandardError=%s\n" % (command, self._unit_log(logs / (service.stem + ".out.log")), self._unit_log(logs / (service.stem + ".err.log"))))
         self._atomic_write(service, data.encode(), 0o644)
@@ -306,23 +331,49 @@ class LinuxSMBMount(SMBMount):
             return {"persistent": False, "warning": "systemctl --user could not enable mount persistence"}
         return {"persistent": True, "label": service.stem, "service": str(service), "timer": str(timer)}
 
-    def mount(self, host, share, user, persistent, wait):
-        point = self._mount_point(host, share, user)
+    def mount(self, hosts, share, user, persistent, wait):
+        hosts = self._hosts(hosts)
+        active_host, point = self._active_mount(hosts, share, user)
         via = "already_mounted"
         if point is None:
-            self._require_fstab(host, share, user)
-            result = self._run(["mount", "/mnt/" + share], timeout=45)
-            if result.returncode:
-                raise ToolError("mount_failed", "mount could not mount /mnt/%s: %s" % (share, result.stderr.strip()))
-            point = self._wait_for_mount(host, share, user, wait)
+            if len(hosts) == 1:
+                self._require_fstab(hosts[0], share, user)
+                result = self._run(["mount", "/mnt/" + share], timeout=45)
+                if result.returncode:
+                    raise ToolError("mount_failed", "mount could not mount /mnt/%s: %s" % (share, result.stderr.strip()))
+                point = self._wait_for_mount(hosts[0], share, user, wait)
+                via = "mount"
+            failures = []
+            for host in hosts if len(hosts) > 1 else ():
+                try:
+                    self._require_fstab(host, share, user)
+                except ToolError as exc:
+                    failures.append("%s: %s" % (host, exc.message))
+                    continue
+                result = self._run(["mount", "//%s/%s" % (host, share)], timeout=45)
+                if result.returncode:
+                    failures.append("%s: %s" % (host, result.stderr.strip() or "mount failed"))
+                    continue
+                try:
+                    point = self._wait_for_mount(host, share, user, wait)
+                    break
+                except ToolError as exc:
+                    failures.append("%s: %s" % (host, exc.message))
+            if point is None:
+                active_host, mounted_point = self._active_mount(hosts, share, user)
+                if mounted_point is not None:
+                    self._run(["umount", mounted_point], timeout=60)
+                raise ToolError("mount_failed", "; ".join(failures))
             via = "mount"
         response = {"ok": True, "mounted": True, "mount_point": point, "via": via}
         if point != "/mnt/" + share: response["unexpected_mount_point"] = point
-        if persistent: response.update(self._install_persistent(host, share, user))
+        if persistent: response.update(self._install_persistent(hosts, share, user))
         return response
 
-    def unmount(self, host, share, user, remove_persistent):
-        point = self._mount_point(host, share, user)
+    def unmount(self, hosts, share, user, remove_persistent):
+        hosts = self._hosts(hosts)
+        host = hosts[0]
+        active_host, point = self._active_mount(hosts, share, user)
         response = {"ok": True, "mounted": point is not None, "unmounted": False}
         if point is not None:
             result = self._run(["umount", point], timeout=60)
@@ -352,7 +403,7 @@ def build_parser():
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "mount", "unmount", "fstab-line"):
         command = commands.add_parser(name)
-        command.add_argument("--host", required=True)
+        command.add_argument("--host", required=True, action="append", metavar="HOST", help="SMB host candidate; repeat in preference order")
         command.add_argument("--share", required=True)
         command.add_argument("--user", default=getpass.getuser())
         if name == "mount":
@@ -364,7 +415,8 @@ def build_parser():
 
 
 def validate(args):
-    if not HOST_RE.fullmatch(args.host) or not NAME_RE.fullmatch(args.share) or not NAME_RE.fullmatch(args.user):
+    if (not all(HOST_RE.fullmatch(host) for host in args.host)
+            or not NAME_RE.fullmatch(args.share) or not NAME_RE.fullmatch(args.user)):
         raise ToolError("invalid_arguments", "host, share, or user has invalid characters")
     if getattr(args, "wait", 1) < 1 or getattr(args, "wait", 1) > 300:
         raise ToolError("invalid_arguments", "--wait must be between 1 and 300")
@@ -376,17 +428,20 @@ def run(argv=None, runner=None, home=None, uid=None):
         if sys.platform not in ("darwin", "linux"):
             raise ToolError("unsupported_platform", "swarm-smb-mount only supports macOS or Linux")
         validate(args)
+        if sys.platform == "darwin" and len(args.host) > 1:
+            raise ToolError("invalid_arguments", "multiple --host values are only supported on Linux")
         tool = (LinuxSMBMount if sys.platform == "linux" else SMBMount)(runner, home, uid)
+        host = args.host if sys.platform == "linux" else args.host[0]
         if args.command == "fstab-line":
             if sys.platform != "linux":
                 raise ToolError("invalid_arguments", "fstab-line is only supported on Linux")
-            response = tool.fstab_line(args.host, args.share, args.user)
+            response = tool.fstab_line(host, args.share, args.user)
         elif args.command == "status":
-            response = tool.status(args.host, args.share, args.user)
+            response = tool.status(host, args.share, args.user)
         elif args.command == "mount":
-            response = tool.mount(args.host, args.share, args.user, args.persistent, args.wait)
+            response = tool.mount(host, args.share, args.user, args.persistent, args.wait)
         else:
-            response = tool.unmount(args.host, args.share, args.user, args.remove_persistent)
+            response = tool.unmount(host, args.share, args.user, args.remove_persistent)
         return 0, response
     except ToolError as exc:
         return 2, {"ok": False, "error": exc.code, "message": exc.message}

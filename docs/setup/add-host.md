@@ -20,7 +20,28 @@ automation/agent-swarm/bin/swarm-setup add-host \
   [--update-time 04:30 | --no-auto-update] [--verbose]
 ```
 
-The default installs daily updates at `04:30`; use `--no-auto-update` to leave that schedule disabled. This does not install an update check on first remote use: that is separate functionality. Agent Swarm neither manages nor guarantees package notices Pi may show when it starts. `--install-missing` uses existing tools and attempts only Herdr, gentle-pi, and the official Herdr Pi integration when their base CLIs are available; it does not reinstall the entire Mac. The process prints a brief English summary, for example:
+The default installs daily updates at `04:30`; use `--no-auto-update` to leave that schedule disabled. This does not install an update check on first remote use: that is separate functionality. Agent Swarm neither manages nor guarantees package notices Pi may show when it starts. `--install-missing` uses existing tools and attempts only Herdr, gentle-pi, and the official Herdr Pi integration when their base CLIs are available; it does not reinstall the entire Mac.
+
+### Address candidates and WSL example
+
+`--address` is the first SSH address candidate. Add `--fallback-address ADDR` repeatedly, in preference order, for later candidates. `--origin-address ADDR` is also repeatable, but applies in the reverse direction only: it replaces the origin registry address and any `fallback_addresses` for the reverse alias. For a `spoke`, `--share-host HOST` may be repeated to set ordered SMB hosts; it is rejected for a `hub`.
+
+Every address or share host must start with an alphanumeric character and otherwise contain only letters, digits, dots, or hyphens. Duplicate fallback, origin, or share-host values are rejected; the primary `--address` cannot also be a fallback.
+
+For a WSL node, prefer its Tailscale MagicDNS name and use its LAN address second. For example:
+
+```sh
+automation/agent-swarm/bin/swarm-setup add-host \
+  --name wsl-leo --user <user> \
+  --address 5cg6031yzw.tail3eebf8.ts.net \
+  --fallback-address 192.168.0.21 --ssh-port 2222 \
+  --origin-address macbookleo.tail3eebf8.ts.net \
+  --origin-address 192.168.0.10 \
+  --share-host macbookleo.tail3eebf8.ts.net \
+  --share-host 192.168.0.10
+```
+
+Tailscale already uses the LAN directly when it can, so the LAN candidate mainly covers Tailscale being down. Routing tools can also capture Tailscale peers—for example, a Twingate route for `100.96.0.0/12` captures part of Tailscale's `100.64.0.0/10` range and can break that path; the LAN fallback covers this case. On Windows/WSL, a Wi-Fi profile can be Public, so a firewall rule scoped to the LAN range also applies on public networks using that range. The process prints a brief English summary, for example:
 
 ```text
 [ 1/10] local-preflight OK       origin preflight passed
@@ -47,7 +68,7 @@ Enable SSH and prepare Node, Python 3, and Pi on the target, make the Herdr serv
 
 On WSL, Windows OpenSSH often occupies port 22: if WSL's `sshd` listens, for example, on `127.0.0.1:2222`, use `--address 127.0.0.1 --ssh-port 2222` from an origin that can reach that address. Use `--origin-ssh-port 2222` if the target must return to the origin through that port. Both default to 22. The SSH config alias includes the port (`Port` only if it is not 22); the registry schema does not change. Resume with the same ports: changing them causes an alias-conflict error, never a silent overwrite.
 
-For a spoke, prepare CIFS as described in [SMB mounting](../runbooks/agent-swarm/smb-mount.md#linuxwsl-preparation): `swarm-smb-mount fstab-line --host H --share S --user U` prints the exact line and credentials template. A person adds the line to `/etc/fstab` as root, creates `/mnt/<share>`, and creates `~/.config/agent-swarm/smb-credentials` with mode `0600`. The tool never uses sudo or handles passwords. Setup mounts the catalog and enables a user timer every 300 seconds; if `systemctl --user` is unavailable, mounting can work but persistence degrades with a warning.
+For a spoke, prepare CIFS as described in [SMB mounting](../runbooks/agent-swarm/smb-mount.md#linuxwsl-preparation): `swarm-smb-mount fstab-line --host H --share S --user U` prints the exact line and credentials template. On Linux, repeat `--host` in preference order when using SMB candidates; `fstab-line` returns `fstab_lines`, one fstab line per host. A mount chooses a host only when mounting: an already mounted share does not switch hosts live, so remount to change it. Status reports the active candidate. Selecting an fstab entry by source (`mount //HOST/SHARE`) when several entries use the same mount point has not yet been verified on real Linux. A person adds the line to `/etc/fstab` as root, creates `/mnt/<share>`, and creates `~/.config/agent-swarm/smb-credentials` with mode `0600`. The tool never uses sudo or handles passwords. Setup mounts the catalog and enables a user timer every 300 seconds; if `systemctl --user` is unavailable, mounting can work but persistence degrades with a warning.
 
 The spoke catalog is `/mnt/<share>` (macOS: `/Volumes/<share>`). The registry retains the project path relative to the origin catalog: for example, `/srv/projects/agent-swarm` below `/srv/projects` becomes `/mnt/shared-projects/agent-swarm`. The registry uses `gui_cwd` = `$HOME/tmp` on the target and creates that directory; hostname prefixes are compared case-insensitively. `swarm-delegate` prefers `/usr/bin/python3` and otherwise resolves `python3` from the registry PATH.
 
@@ -117,6 +138,9 @@ When acceptance reports `Not logged in`, it displays `Log Pi in from the GUI on 
 | `--origin-user USER` | Account used by reverse channel. |
 | `--ssh-port PORT` | Target sshd port, 1–65535; default 22. |
 | `--origin-ssh-port PORT` | Origin sshd port used by target, 1–65535; default 22. |
+| `--fallback-address ADDR` | Repeatable SSH candidate after `--address`, in order. |
+| `--origin-address ADDR` | Repeatable reverse-alias SSH candidate; replaces the origin registry candidates for that alias only. |
+| `--share-host HOST` | Repeatable ordered SMB host for a `spoke`; rejected for a `hub`. |
 | `--install-missing` | Herdr via Homebrew (macOS) or official curl installer (Linux); gentle-pi via Pi; Pi integration via `herdr integration install pi` on both. |
 | `--auto-update` / `--no-auto-update` | Enables (default) or omits the daily schedule: launchd on macOS, systemd user service on Linux. |
 | `--update-time HH:MM` | Daily time; default `04:30`. |
@@ -135,7 +159,9 @@ Inspect state with:
 automation/agent-swarm/bin/swarm-setup status --name <name>
 ```
 
-State is `~/.local/state/agent-swarm/setup/<name>.json`. The log is `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log` for a macOS origin and `~/.local/state/agent-swarm/logs/swarm-setup-<name>.log` for Linux/WSL. Share only sanitized diagnostics: logs can contain **public** keys, paths, and usernames. If setup exits `0`, also confirm `automation/agent-swarm/bin/swarm-delegate preflight <name>` returns `"status": "ready"`. Do not mistake `WAITING` or partial SSH success for final acceptance. Rerunning an already configured host is safe: compliant phases report `OK`; a conflicting address, fingerprint, or SSH alias fails instead of overwriting it.
+State is `~/.local/state/agent-swarm/setup/<name>.json`. The log is `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log` for a macOS origin and `~/.local/state/agent-swarm/logs/swarm-setup-<name>.log` for Linux/WSL. Share only sanitized diagnostics: logs can contain **public** keys, paths, and usernames. If setup exits `0`, also confirm `automation/agent-swarm/bin/swarm-delegate preflight <name>` returns `"status": "ready"`. Do not mistake `WAITING` or partial SSH success for final acceptance. Rerunning an already configured host is safe: compliant phases report `OK`; a conflicting address, fingerprint, candidate list, or SSH alias fails instead of overwriting it.
+
+The registry accepts optional ordered `fallback_addresses` and `share_hosts` host keys. `fallback_addresses` supplies SSH candidates after `address`; `share_hosts` supplies SMB hosts for that spoke, otherwise SMB defaults to the global `share.host`. Registries without either optional key remain valid.
 
 ## Manual procedure (reference)
 

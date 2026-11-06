@@ -10,7 +10,8 @@ _NAME = re.compile(r'^[a-z0-9-]+$')
 _TOP_LEVEL = {'version', 'hub', 'share', 'hosts'}
 _SHARE = {'host', 'name', 'user'}
 _HOST = {'hostname_prefix', 'role', 'ssh_alias', 'address', 'catalog_root', 'repo', 'path', 'gui_cwd', 'runtimes'}
-_ADDRESS = re.compile(r'^[A-Za-z0-9.-]+$')
+_OPTIONAL_HOST = {'fallback_addresses', 'share_hosts'}
+_ADDRESS = re.compile(r'^[A-Za-z0-9][A-Za-z0-9.-]*$')
 
 
 class RegistryError(ValueError):
@@ -52,11 +53,17 @@ class HostRegistry:
         prefixes = []
         hubs = []
         for name, host in hosts.items():
-            if not isinstance(host, dict) or set(host) != _HOST:
+            if not isinstance(host, dict) or not _HOST <= set(host) or not set(host) <= _HOST | _OPTIONAL_HOST:
                 raise RegistryError('INVALID_HOST_REGISTRY')
             if not isinstance(host['hostname_prefix'], str) or not host['hostname_prefix']:
                 raise RegistryError('INVALID_HOST_REGISTRY')
             if host['role'] not in ('hub', 'spoke') or not _name(host['ssh_alias']) or not isinstance(host['address'], str) or not _ADDRESS.fullmatch(host['address']):
+                raise RegistryError('INVALID_HOST_REGISTRY')
+            fallbacks = host.get('fallback_addresses')
+            if fallbacks is not None and (not isinstance(fallbacks, list) or not fallbacks or any(not isinstance(address, str) or not _ADDRESS.fullmatch(address) for address in fallbacks) or len(fallbacks) != len(set(fallbacks)) or host['address'] in fallbacks):
+                raise RegistryError('INVALID_HOST_REGISTRY')
+            shares = host.get('share_hosts')
+            if shares is not None and (not isinstance(shares, list) or not shares or any(not isinstance(address, str) or not _ADDRESS.fullmatch(address) for address in shares) or len(shares) != len(set(shares))):
                 raise RegistryError('INVALID_HOST_REGISTRY')
             if not all(_absolute(host[key]) for key in ('catalog_root', 'repo', 'gui_cwd')):
                 raise RegistryError('INVALID_HOST_REGISTRY')

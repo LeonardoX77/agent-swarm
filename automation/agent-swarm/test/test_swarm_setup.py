@@ -1,6 +1,7 @@
 import io
 import os
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "lib"))
 from swarm_setup import PHASES, Setup, SetupError, Waiting
+from host_registry import HostRegistry
 
 
 class Registry:
@@ -100,6 +102,22 @@ class SetupTests(unittest.TestCase):
                         setup.ssh_to_new()
                     self.assertEqual((key.parent / "config").read_bytes(), before)
 
+    def test_single_candidate_alias_bytes_are_unchanged_in_both_directions(self):
+        key = "/tmp/key"
+        expected = ("Host swarm-peer\n  HostName peer.local\n  Port 2222\n  User leo\n  IdentityFile /tmp/key\n"
+                    "  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n"
+                    "  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ForwardAgent no\n")
+        self.assertEqual(Setup.alias_block("swarm-peer", "peer.local", "leo", key, 2222, ["peer.local"]), expected)
+        self.assertEqual(Setup.alias_block("swarm-peer", "peer.local", "leo", key, 2222, ["peer.local"]), expected)
+
+    def test_multi_candidate_alias_uses_host_key_alias_and_proxy_command(self):
+        block = Setup.alias_block("swarm-peer", "tailnet", "leo", "/tmp/key", 2222,
+                                  ["tailnet", "192.168.1.2"], "/tmp/swarm ssh connect")
+        self.assertIn("  HostKeyAlias swarm-peer\n", block)
+        self.assertIn("ProxyCommand ", block)
+        self.assertIn("--port 2222 -- tailnet 192.168.1.2", block)
+        self.assertNotIn("HostName", block)
+
     def test_port_cli_validation_and_help(self):
         script = Path(__file__).parents[1] / "bin/swarm-setup"
         with tempfile.TemporaryDirectory() as home:
@@ -113,6 +131,72 @@ class SetupTests(unittest.TestCase):
             self.assertEqual((result.returncode, result.stderr), (0, ""))
             for option in ("--ssh-port PORT", "--origin-ssh-port PORT"):
                 self.assertIn(option, result.stdout)
+
+    def test_candidate_cli_rejects_invalid_values_without_writing_state(self):
+        script = Path(__file__).parents[1] / "bin/swarm-setup"
+        common = ["add-host", "--name", "new", "--address", "New.local", "--user", "leo"]
+        cases = (
+            ("address repeated as fallback", ["--fallback-address", "New.local"]),
+            ("repeated fallback", ["--fallback-address", "one.local", "--fallback-address", "one.local"]),
+            ("repeated share host", ["--share-host", "one.local", "--share-host", "one.local"]),
+            ("repeated origin address", ["--origin-address", "one.local", "--origin-address", "one.local"]),
+            ("hub share host", ["--role", "hub", "--share-host", "one.local"]),
+        )
+        for label, arguments in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as home:
+                result = subprocess.run([sys.executable, str(script), *common, *arguments],
+                                        env=dict(os.environ, HOME=home), capture_output=True, text=True)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (2, "", "INVALID_INPUT\n"))
+                self.assertEqual(list(Path(home).iterdir()), [])
+        for option in ("--address", "--fallback-address", "--origin-address", "--share-host"):
+            for invalid in ("bad address", "-x", "--help", "-oProxyCommand"):
+                with self.subTest(option=option, invalid=invalid), tempfile.TemporaryDirectory() as home:
+                    arguments = ["--address", "New.local", "--user", "leo"]
+                    if option == "--address":
+                        arguments[:2] = ["--address=" + invalid] if invalid.startswith("-") else ["--address", invalid]
+                    else:
+                        arguments.extend([option + "=" + invalid] if invalid.startswith("-") else [option, invalid])
+                    if invalid.startswith("-"):
+                        main = runpy.run_path(str(script))["main"]
+                        stdout, stderr = io.StringIO(), io.StringIO()
+                        with patch.dict(main.__globals__, Setup=unittest.mock.Mock()) as namespace:
+                            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                                code = main(["add-host", "--name", "new", *arguments])
+                            self.assertEqual(code, 2)
+                            namespace["Setup"].assert_not_called()
+                        self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", "INVALID_INPUT\n"))
+                    else:
+                        result = subprocess.run([sys.executable, str(script), "add-host", "--name", "new", *arguments],
+                                                env=dict(os.environ, HOME=home), capture_output=True, text=True)
+                        self.assertEqual((result.returncode, result.stdout, result.stderr), (2, "", "INVALID_INPUT\n"))
+                    self.assertEqual(list(Path(home).iterdir()), [])
+
+    def test_candidate_cli_help_lists_all_candidate_options(self):
+        script = Path(__file__).parents[1] / "bin/swarm-setup"
+        result = subprocess.run([sys.executable, str(script), "add-host", "--help"], capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        for option in ("--fallback-address ADDR", "--origin-address ADDR", "--share-host HOST"):
+            self.assertIn(option, result.stdout)
+
+    def test_build_registry_entry_keeps_optional_candidates_optional_and_valid(self):
+        for options, expected in (({}, {}), ({"fallback_addresses": ["100.64.0.2"], "share_hosts": ["smb.tail", "192.168.1.2"]}, {"fallback_addresses": ["100.64.0.2"], "share_hosts": ["smb.tail", "192.168.1.2"]})):
+            with self.subTest(options=options):
+                setup = self.make(**options)
+                setup.origin = setup.registry.get("origin")
+                setup.remote_path = "/usr/bin:/bin"
+                setup.remote_home = "/Users/remote"
+                setup.remote_system = "Darwin"
+                setup.remote_tool = lambda command: Result(out="Remote\n" if command == "scutil --get LocalHostName" else "/usr/bin/tool\n")
+                entry = setup.build_registry_entry()
+                self.assertEqual({key: entry[key] for key in expected}, expected)
+                self.assertEqual(set(entry) & {"fallback_addresses", "share_hosts"}, set(expected))
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "hosts.json"
+                    origin = {key: value for key, value in setup.registry.get("origin").items() if key != "name"}
+                    path.write_text(json.dumps({"version": 1, "hub": "origin", "share": setup.registry.share,
+                                                "hosts": {"origin": origin, "new-mac": entry}}))
+                    self.assertEqual(HostRegistry(path).get("new-mac")["fallback_addresses"] if expected else None,
+                                     expected.get("fallback_addresses"))
 
     def test_valid_port_options_reach_setup_and_status_stays_unchanged(self):
         script = Path(__file__).parents[1] / "bin/swarm-setup"
@@ -230,8 +314,11 @@ class SetupTests(unittest.TestCase):
         self.assertIn(str(setup.home / ".local/bin") + ":" + str(pi.parent), path)
         self.assertIn(str(setup.home / ".hermes/node/bin"), path)
         self.assertTrue(path.endswith("/usr/bin:/bin:/usr/sbin:/sbin"))
-        self.assertEqual(setup.remote_tool("command -v pi").stdout, str(pi) + "\n")
-        self.assertEqual(setup.remote_tool("pi list").stdout, "gentle-pi\n")
+        # Restrict the lookup to the fake home directories so a host-installed pi (for example
+        # Homebrew's) cannot shadow the one under test.
+        home_path = ":".join(p for p in path.split(":") if p.startswith(str(setup.home)))
+        self.assertEqual(setup.remote_tool("PATH='%s' command -v pi" % home_path).stdout, str(pi) + "\n")
+        self.assertEqual(setup.remote_tool("PATH='%s' pi list" % home_path).stdout, "gentle-pi\n")
 
     def test_platform_specific_log_locations(self):
         for system, suffix in (("Linux", ".local/state/agent-swarm/logs"),
@@ -475,6 +562,81 @@ class SetupTests(unittest.TestCase):
         setup = self.make()
         setup.command = lambda argv, **kw: Result(1 if argv[:1] == ["ssh"] else 0, "256 SHA256:ok host")
         with self.assertRaisesRegex(Waiting, "--host-fingerprint SHA256:ok"): setup.ssh_to_new()
+
+    def test_multi_candidate_stale_alias_known_host_fails_closed_without_writes(self):
+        setup = self.make(host_fingerprint="SHA256:ok", fallback_addresses=["lan.local"], no_wait=True)
+        ssh = setup.home / ".ssh"; ssh.mkdir()
+        key = ssh / "agent_swarm_new_mac"; key.write_text("key"); key.with_suffix(".pub").write_text("pub")
+        known = ssh / "known_hosts"; known.write_text("swarm-new-mac ssh-ed25519 STALEKEY\nuser-entry ssh-ed25519 KEEP\n")
+        original_known = known.read_bytes()
+        def runner(argv, **kwargs):
+            if argv[:1] == ["ssh"]: return Result(1)
+            if argv[:1] == ["ssh-keyscan"]: return Result(out="%s ssh-ed25519 NEWKEY\n" % argv[-1])
+            if argv[:2] == ["ssh-keygen", "-lf"]: return Result(out="256 SHA256:ok host\n")
+            return Result()
+        setup.runner = runner
+        with self.assertRaisesRegex(SetupError, "swarm-new-mac.*verify and remove.*stale"):
+            setup.ssh_to_new()
+        self.assertFalse((ssh / "config").exists())
+        self.assertEqual(known.read_bytes(), original_known)
+        self.assertFalse(setup.state_path.exists())
+
+    @unittest.skipUnless(shutil.which("ssh"), "ssh unavailable")
+    def test_multi_candidate_alias_quotes_identity_file_for_home_with_spaces(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home with spaces"; key = home / ".ssh/agent_swarm_peer"
+            config = Path(directory) / "config"
+            config.write_text(Setup.alias_block("swarm-peer", "tailnet", "leo", str(key), 2222,
+                                                ["tailnet", "192.168.1.2"], "/tmp/swarm-ssh-connect"))
+            result = subprocess.run(["ssh", "-G", "-F", str(config), "swarm-peer"], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            values = dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line)
+            self.assertEqual(values["identityfile"], str(key))
+            self.assertIn("--port 2222 -- tailnet 192.168.1.2", values["proxycommand"])
+
+    def test_multi_candidate_different_key_fails_closed_without_alias_known_hosts_or_state(self):
+        setup = self.make(host_fingerprint="SHA256:ok", fallback_addresses=["lan.local"])
+        key = setup.home / ".ssh/agent_swarm_new_mac"; key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("pub")
+        def runner(argv, **kwargs):
+            if argv[:1] == ["ssh"]: return Result(1)
+            if argv[:1] == ["ssh-keyscan"]:
+                return Result(out="%s ssh-ed25519 KEY\n" % argv[-1])
+            if argv[:2] == ["ssh-keygen", "-lf"]:
+                return Result(out="256 %s host\n" % ("SHA256:ok" if kwargs.get("input", "").startswith("New.local") else "SHA256:other"))
+            return Result()
+        setup.runner = runner
+        with self.assertRaisesRegex(SetupError, "SSH host fingerprint mismatch"):
+            setup.ssh_to_new()
+        self.assertFalse((setup.home / ".ssh/config").exists())
+        self.assertFalse((setup.home / ".ssh/known_hosts").exists())
+        self.assertFalse(setup.state_path.exists())
+
+    def test_multi_candidate_all_unreachable_uses_remote_login_wait(self):
+        setup = self.make(fallback_addresses=["lan.local"], no_wait=True)
+        setup.socket_check = lambda address, port: False
+        with self.assertRaisesRegex(Waiting, "On new-mac: enable macOS Remote Login or a running sshd on Linux for user leo"):
+            setup.remote_login()
+        self.assertFalse((setup.home / ".ssh/config").exists())
+        self.assertFalse((setup.home / ".ssh/known_hosts").exists())
+        self.assertFalse(setup.state_path.exists())
+
+    def test_multi_candidate_skips_unreachable_candidate_but_writes_one_alias_key(self):
+        setup = self.make(host_fingerprint="SHA256:ok", fallback_addresses=["lan.local"])
+        key = setup.home / ".ssh/agent_swarm_new_mac"; key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("pub")
+        def runner(argv, **kwargs):
+            if argv[:1] == ["ssh"]: return Result(0 if "leo@New.local" in " ".join(argv) else 1)
+            if argv[:1] == ["ssh-keyscan"]:
+                return Result(1) if argv[-1] == "lan.local" else Result(out="New.local ssh-ed25519 KEY\n")
+            if argv[:2] == ["ssh-keygen", "-lf"]: return Result(out="256 SHA256:ok host\n")
+            return Result()
+        setup.runner = runner
+        setup.socket_check = lambda address, port: address == "New.local"
+        self.assertEqual(setup.ssh_to_new(), ("changed", "configured SSH channel"))
+        self.assertIn("SSH candidate unreachable: lan.local\n", setup.output.getvalue())
+        config = (setup.home / ".ssh/config").read_text()
+        self.assertIn("HostKeyAlias swarm-new-mac", config)
+        self.assertIn("--port 22 -- New.local lan.local", config)
+        self.assertEqual((setup.home / ".ssh/known_hosts").read_text(), "swarm-new-mac ssh-ed25519 KEY\n")
 
     def test_fingerprint_mismatch_stops_hard(self):
         setup = self.make(host_fingerprint="SHA256:not-it")

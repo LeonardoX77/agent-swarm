@@ -14,7 +14,7 @@ Retire sólo los artefactos que una alta actual de Agent Swarm creó y hágalo e
 | Recurso de la alta | Reversión local permitida |
 | --- | --- |
 | Registro local (`config/hosts.json`, no versionado) | Quite o corrija sólo la entrada aprobada; haga antes una copia y revise que no contenga cambios ajenos. |
-| Clave y alias SSH dedicados | Retire únicamente el par de clave y el bloque `Host swarm-<target>` creados para esa dirección. Nunca borre una clave reutilizada. |
+| Clave y alias SSH dedicados | Retire únicamente el par de clave y el bloque `Host swarm-<target>` creados para esa dirección. Para un alias con varios candidatos, retire también su línea de `known_hosts` asociada al alias; retire `~/.local/agent-swarm/bin/swarm-ssh-connect` sólo cuando ningún otro alias lo use. Nunca borre una clave reutilizada. |
 | `authorized_keys` | Quite sólo la línea añadida para la clave dedicada, conservando las demás entradas y copias de seguridad. |
 | Montaje SMB persistente | Use `swarm-smb-mount unmount --remove-persistent` con los valores del share registrado; elimina sólo ese montaje y su LaunchAgent. |
 | Skill y bootstrap | Retire únicamente la copia y el bloque bootstrap creados para el host nuevo, después de confirmar que no sirven a otro canal. |
