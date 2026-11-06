@@ -109,6 +109,25 @@ ssh swarm-<target> hostname
 
 Debe devolver el nombre del destino sin solicitar contraseña ni confirmar una huella. Repita los pasos 1–5 con origen y destino intercambiados para obtener comunicación en ambos sentidos.
 
+## Opcional: atajo interactivo para zsh
+
+Después de configurar y verificar el alias SSH, puede añadir un atajo en `~/.zshrc` del origen. Este ejemplo usa el destino registrado `wsl-leo`; adáptelo a su host. Si `aiconnect` ya existe, agregue un caso correspondiente a esa función en lugar de redefinirla.
+
+```zsh
+aiconnect() {
+  if (( $# != 1 )); then
+    printf 'Usage: aiconnect <target>\n' >&2
+    return 2
+  fi
+  case "$1" in
+    wsl-leo) command ssh swarm-wsl-leo ;;
+    *) printf 'Unknown host: %s\n' "$1" >&2; return 2 ;;
+  esac
+}
+```
+
+Ejecute `source ~/.zshrc` o abra una terminal nueva. Conéctese con `aiconnect wsl-leo` si ese es el destino configurado. El atajo usa el alias SSH existente y no configura ni omite sus comprobaciones de seguridad.
+
 ## Uso con Agent Swarm
 
 Una vez que ambas direcciones responden, confirme el registro y el catálogo con `swarm-delegate preflight <target>`. Si el destino es un spoke y informa `catalog_missing`, configure su montaje SMB antes de enviar tareas. Consulte [Agregar un equipo al canal Agent Swarm](../../setup/add-host.md) para el proceso completo y [Montaje SMB entre equipos](smb-mount.md) para el montaje persistente.

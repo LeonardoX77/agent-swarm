@@ -109,6 +109,25 @@ ssh swarm-<target> hostname
 
 It must return the destination name without requesting a password or fingerprint confirmation. Repeat steps 1–5 with origin and destination swapped to establish bidirectional communication.
 
+## Optional: interactive zsh shortcut
+
+After configuring and verifying the SSH alias, you can add a shortcut to `~/.zshrc` on the origin. This example uses the registered destination `wsl-leo`; adapt it to your host. If `aiconnect` already exists, add a corresponding case to that function instead of redefining it.
+
+```zsh
+aiconnect() {
+  if (( $# != 1 )); then
+    printf 'Usage: aiconnect <target>\n' >&2
+    return 2
+  fi
+  case "$1" in
+    wsl-leo) command ssh swarm-wsl-leo ;;
+    *) printf 'Unknown host: %s\n' "$1" >&2; return 2 ;;
+  esac
+}
+```
+
+Run `source ~/.zshrc` or open a new terminal. Connect with `aiconnect wsl-leo` if that is the configured target. The shortcut uses the existing SSH alias and does not configure or bypass its security checks.
+
 ## Use with Agent Swarm
 
 Once both directions respond, confirm registry and catalog with `swarm-delegate preflight <target>`. If the destination is a spoke and reports `catalog_missing`, configure its SMB mount before submitting tasks. See [Add a host to the Agent Swarm channel](../../setup/add-host.md) for the complete process and [SMB mounting between machines](smb-mount.md) for persistent mounting.
