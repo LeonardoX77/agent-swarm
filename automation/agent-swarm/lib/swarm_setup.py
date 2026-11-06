@@ -287,9 +287,9 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         return match.group(1)
 
     @staticmethod
-    def alias_block(alias, address, user, key, port=22, candidates=None, helper=None):
+    def alias_block(alias, address, user, key, port=22, candidates=None, helper=None, interpreter=None):
         if candidates and len(candidates) > 1:
-            command = "  ProxyCommand %s %s --port %s -- %s\n" % (shlex.quote(sys.executable), shlex.quote(str(helper)), port, " ".join(shlex.quote(value) for value in candidates))
+            command = "  ProxyCommand %s %s --port %s -- %s\n" % (shlex.quote(interpreter or sys.executable), shlex.quote(str(helper)), port, " ".join(shlex.quote(value) for value in candidates))
             quoted_key = '"' + key.replace('\\', '\\\\').replace('"', '\\"') + '"'
             return ("Host %s\n  HostKeyAlias %s\n%s  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ForwardAgent no\n" % (alias, alias, command, user, quoted_key))
         return ("Host %s\n  HostName %s\n%s  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ForwardAgent no\n" % (alias, address, "" if port == 22 else "  Port %s\n" % port, user, key))
@@ -306,6 +306,14 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         if config.exists(): config.with_name(config.name + ".swarm-setup-%s.bak" % int(self.clock())).write_text(prior, encoding="utf-8")
         with config.open("a", encoding="utf-8") as target: target.write(("\n" if prior and not prior.endswith("\n") else "") + block)
         os.chmod(str(config), 0o600); return True
+
+    def remote_python3_path(self):
+        """Return the absolute Python interpreter used by remote SSH aliases."""
+        result = self.remote_tool("command -v python3")
+        paths = result.stdout.splitlines()
+        if result.returncode or len(paths) != 1 or not os.path.isabs(paths[0]):
+            raise SetupError("Could not resolve an absolute remote python3 interpreter")
+        return paths[0]
 
     def install_local_helper(self):
         source = Path(__file__).resolve().parents[3] / "automation/agent-swarm/bin/swarm-ssh-connect"
@@ -426,13 +434,14 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
     def ssh_to_origin(self):
         origin_candidates = self.candidates(remote=True)
         remote_helper = self.remote_home_path("/.local/agent-swarm/bin/swarm-ssh-connect")
+        remote_python = self.remote_python3_path() if len(origin_candidates) > 1 else None
         # A working alias may still point at port 22. Check explicit ports before
         # trusting that probe, including when no local setup state exists yet.
         if len(origin_candidates) > 1 or self.origin_ssh_port != 22 or self.origin_ssh_port_explicit:
             home = self.remote_home_path()
             alias = "swarm-" + self.origin["name"]
             key = home + "/.ssh/agent_swarm_" + self.origin["name"].replace("-", "_")
-            block = self.alias_block(alias, origin_candidates[0], self.origin_user, key, self.origin_ssh_port, origin_candidates, remote_helper)
+            block = self.alias_block(alias, origin_candidates[0], self.origin_user, key, self.origin_ssh_port, origin_candidates, remote_helper, remote_python)
             program = """import json,pathlib,re,sys
 p=pathlib.Path(json.loads(sys.argv[1])); block=json.loads(sys.argv[2]); alias=json.loads(sys.argv[3])
 s=p.read_text() if p.exists() else ''
@@ -479,7 +488,7 @@ if missing:
             with authorized.open("a") as target: target.write(("" if not previous or previous.endswith("\n") else "\n") + line + "\n")
         alias = "swarm-" + self.origin["name"]
         if len(origin_candidates) > 1: self._remote_copy(Path(__file__).resolve().parents[3] / "automation/agent-swarm/bin/swarm-ssh-connect", "~/.local/agent-swarm/bin/swarm-ssh-connect")
-        block = self.alias_block(alias, origin_candidates[0], self.origin_user, key, self.origin_ssh_port, origin_candidates, remote_helper)
+        block = self.alias_block(alias, origin_candidates[0], self.origin_user, key, self.origin_ssh_port, origin_candidates, remote_helper, remote_python)
         program = """import json,pathlib,re,sys,time
 p=pathlib.Path(json.loads(sys.argv[1])); block=json.loads(sys.argv[2]); s=p.read_text() if p.exists() else ''
 m=re.search(r'(?ms)^Host '+re.escape(json.loads(sys.argv[3]))+r'\\s*$.*?(?=^Host |\\Z)',s)

@@ -31,6 +31,7 @@ class FakeMacs:
         self.port_open_after, self.authorized_after, self.keychain_after = 2, 2, 1
         self.port_polls = self.authorization_polls = self.keychain_polls = 0
         self.system = "Darwin"
+        self.python3_path = "/opt/new-host/bin/python3"
         self.tools = {"brew", "herdr", "node", "pi", "gentle-pi", "python3"}
         self.mounted = self.reverse_alias = self.update_installed = False
         self.update_calls, self.nonces = [], []
@@ -80,6 +81,8 @@ class FakeMacs:
             nvm_bin = str(self.remote_home / ".nvm/versions/node/v24.19.0/bin")
             if name == "pi" and self.nvm_only_pi:
                 return Result(out=nvm_bin + "/pi\n") if nvm_bin in path_prefix.split(":") else Result(1)
+            if name == "python3" and name in self.tools:
+                return Result(out=self.python3_path + "\n")
             return Result(out="/opt/fake/bin/%s\n" % name) if name in self.tools else Result(1)
         if command == "pi list 2>/dev/null | grep -F gentle-pi":
             available = "gentle-pi" in self.tools and (not self.nvm_only_pi or str(self.remote_home / ".nvm/versions/node/v24.19.0/bin") in path_prefix.split(":"))
@@ -266,6 +269,26 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertIn("ssh-keyscan -p 2222 -t ed25519 Origin.local", machines.remote_commands)
         self.assertEqual((machines.origin_home / ".ssh/known_hosts").read_text().splitlines(), ["swarm-bea ssh-ed25519 NEWKEY"])
         self.assertEqual((machines.remote_home / ".ssh/known_hosts").read_text().splitlines(), ["swarm-origin ssh-ed25519 ORIGINKEY"])
+
+    def test_multi_candidate_aliases_use_the_ssh_side_python_interpreter(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        setup, _ = self.make_setup(machines, fallback_addresses=["192.168.1.20"],
+                                   origin_addresses=["Origin.local", "100.64.0.1"])
+        self.assertEqual(setup.run(), 0, setup.output.getvalue())
+        forward = (machines.origin_home / ".ssh/config").read_text()
+        reverse = (machines.remote_home / ".ssh/config").read_text()
+        self.assertIn("  ProxyCommand %s " % shlex.quote(sys.executable), forward)
+        self.assertIn("  ProxyCommand %s " % shlex.quote(machines.python3_path), reverse)
+
+    def test_reverse_multi_candidate_alias_fails_without_an_absolute_remote_python3(self):
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.tools.remove("python3")
+        setup, _ = self.make_setup(machines, origin_addresses=["Origin.local", "100.64.0.1"])
+        setup.local_preflight()
+        with self.assertRaisesRegex(SetupError, "absolute remote python3 interpreter"):
+            setup.ssh_to_origin()
+        self.assertFalse((machines.remote_home / ".ssh").exists())
+        self.assertFalse((machines.remote_home / ".local/agent-swarm/bin/swarm-ssh-connect").exists())
 
     def test_reverse_alias_uses_origin_registry_fallback_addresses(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
