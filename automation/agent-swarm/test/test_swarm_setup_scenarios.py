@@ -36,7 +36,7 @@ class FakeMacs:
         self.update_calls, self.nonces = [], []
         self.nonce_mismatch = False
         self.require_authorized_key = self.nvm_only_pi = self.scp_requires_parent = False
-        self.remote_commands = []; self.scp_destinations = []
+        self.remote_commands = []; self.scp_destinations = []; self.keyscan_comments = False
 
     def close(self):
         self.origin.cleanup()
@@ -92,8 +92,10 @@ class FakeMacs:
             return Result(0 if self.reverse_alias else 1)
         if command.startswith("ssh-keyscan "):
             words = shlex.split(command)
-            host = "[Origin.local]:" + words[words.index("-p") + 1] if "-p" in words else "Origin.local"
-            return Result(out=host + " ssh-ed25519 ORIGINKEY\n")
+            port = words[words.index("-p") + 1] if "-p" in words else None
+            host = "[Origin.local]:" + port if port else "Origin.local"
+            comment = "# Origin.local:%s SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20\n" % (port or "22") if self.keyscan_comments else ""
+            return Result(out=comment + host + " ssh-ed25519 ORIGINKEY\n")
         if command.endswith(" | ssh-keygen -lf -"):
             return Result(out="256 SHA256:ORIGINFP origin\n")
         if command.startswith("test -f ") and "ssh-keygen -t ed25519" in command:
@@ -164,7 +166,11 @@ class FakeMacs:
             return Result(out="256 SHA256:NEWFP new\n" if "-" in argv else "256 SHA256:ORIGINFP origin\n")
         if argv[:1] == ["ssh-keygen"]:
             self._keypair(Path(argv[argv.index("-f") + 1]), "ORIGINKEY"); return Result()
-        if argv[:1] == ["ssh-keyscan"]: return Result(out="Bea.local ssh-ed25519 NEWKEY\n")
+        if argv[:1] == ["ssh-keyscan"]:
+            port = argv[argv.index("-p") + 1] if "-p" in argv else None
+            host = "[Bea.local]:" + port if port else "Bea.local"
+            comment = "# Bea.local:%s SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20\n" % (port or "22") if self.keyscan_comments else ""
+            return Result(out=comment + host + " ssh-ed25519 NEWKEY\n")
         if argv[:1] == ["scp"]:
             source, remote = Path(argv[1]), argv[2].split(":", 1)[1]
             destination = Path(remote); self.scp_destinations.append(destination)
@@ -239,20 +245,27 @@ class SetupScenarioTests(unittest.TestCase):
             self.assertEqual(json.loads(first.state_path.read_text())["origin_ssh_port"], 2200)
 
     def test_multi_candidate_aliases_install_helpers_in_both_directions(self):
-        machines, setup, registry_path = self.run_zero_to_done(fallback_addresses=["192.168.1.20"],
-                                                                 origin_addresses=["Origin.local", "100.64.0.1"])
+        machines = FakeMacs(); self.addCleanup(machines.close)
+        machines.keyscan_comments = True
+        setup, registry_path = self.make_setup(machines, fallback_addresses=["192.168.1.20"],
+                                               origin_addresses=["Origin.local", "100.64.0.1"],
+                                               ssh_port=2222, origin_ssh_port=2222)
+        self.assertEqual(setup.run(), 0, setup.output.getvalue())
         origin_config = (machines.origin_home / ".ssh/config").read_text()
         remote_config = (machines.remote_home / ".ssh/config").read_text()
         for config, alias, candidates in ((origin_config, "bea", "Bea.local 192.168.1.20"),
                                           (remote_config, "origin", "Origin.local 100.64.0.1")):
             self.assertIn("Host swarm-" + alias + "\n  HostKeyAlias swarm-" + alias, config)
-            self.assertIn("--port 22 -- " + candidates, config)
+            self.assertIn("--port 2222 -- " + candidates, config)
             self.assertNotIn("HostName " + candidates.split()[0], config)
         self.assertEqual((machines.origin_home / ".ssh/known_hosts").read_bytes(), b"swarm-bea ssh-ed25519 NEWKEY\n")
         self.assertEqual((machines.remote_home / ".ssh/known_hosts").read_bytes(), b"swarm-origin ssh-ed25519 ORIGINKEY\n")
         helper = ".local/agent-swarm/bin/swarm-ssh-connect"
         self.assertTrue((machines.origin_home / helper).is_file())
         self.assertTrue((machines.remote_home / helper).is_file())
+        self.assertIn("ssh-keyscan -p 2222 -t ed25519 Origin.local", machines.remote_commands)
+        self.assertEqual((machines.origin_home / ".ssh/known_hosts").read_text().splitlines(), ["swarm-bea ssh-ed25519 NEWKEY"])
+        self.assertEqual((machines.remote_home / ".ssh/known_hosts").read_text().splitlines(), ["swarm-origin ssh-ed25519 ORIGINKEY"])
 
     def test_reverse_alias_uses_origin_registry_fallback_addresses(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
