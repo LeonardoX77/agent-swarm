@@ -38,7 +38,7 @@ class FakeMacs:
         self.update_calls, self.nonces = [], []
         self.nonce_mismatch = False
         self.require_authorized_key = self.nvm_only_pi = self.scp_requires_parent = False
-        self.remote_commands = []; self.scp_destinations = []; self.keyscan_comments = False
+        self.remote_commands = []; self.local_commands = []; self.scp_destinations = []; self.keyscan_comments = False
 
     def close(self):
         self.origin.cleanup()
@@ -124,8 +124,9 @@ class FakeMacs:
         if command.startswith("test -d /Volumes/") or command.startswith("test -d /mnt/"): return Result(0 if self.mounted else 1)
         if "swarm-smb-mount fstab-line" in command:
             return Result(out=json.dumps({"fstab_line": "EXACT FSTAB LINE", "credentials_template": "username=leo\npassword=<your SMB password>\n", "credentials_mode": "0600"}))
-        if "swarm-update" in command and command.endswith(" status"):
-            return Result(0 if self.update_installed else 1, json.dumps({"hour": 4, "minute": 30, "loaded": self.update_installed}))
+        if "swarm-update" in command and command.endswith(" status --json"):
+            return Result(0 if self.update_installed else 1,
+                          json.dumps({"config": {"hour": 4, "minute": 30}, "loaded": self.update_installed}))
         if "swarm-update" in command and " install --hour " in command:
             self.update_calls.append(command); self.update_installed = True; return Result()
         if "swarm-delegate" in command:
@@ -158,6 +159,7 @@ class FakeMacs:
         raise AssertionError("unrecognized remote command: %r" % command)
 
     def __call__(self, argv, **kwargs):
+        self.local_commands.append(list(argv))
         program = kwargs.get("input") or ""
         if argv[:2] == ["ssh", "swarm-bea"]: return self._remote(argv[2], program)
         text = " ".join(str(item) for item in argv)
@@ -187,7 +189,7 @@ class FakeMacs:
             shutil.copyfile(str(source), str(destination)); return Result()
         if argv[:1] == ["tar"]:
             source = Path(argv[argv.index("-C") + 1]) / argv[-1]
-            with tarfile.open(argv[2], "w") as bundle: bundle.add(source, arcname=argv[-1])
+            with tarfile.open(argv[argv.index("-cf") + 1], "w") as bundle: bundle.add(source, arcname=argv[-1])
             return Result()
         if "swarm-delegate" in text:
             if " submit " in text:
@@ -563,6 +565,26 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertEqual(setup.run(), 0, setup.output.getvalue())
         self.assertIn(str(nvm_bin), HostRegistry(registry_path).get("bea")["path"])
         self.assertTrue(any(command.startswith("PATH=") and "command -v pi" in command for command in machines.remote_commands))
+
+    def test_skill_ignores_macos_metadata_but_copies_real_content_drift(self):
+        machines, first, registry_path = self.run_zero_to_done()
+        skill = machines.remote_home / ".pi/agent/skills/agent-swarm-remote"
+        (skill / "._SKILL.md").write_text("metadata")
+        (skill / ".DS_Store").write_text("metadata")
+        (skill / "assets/._bootstrap-block.md").write_text("metadata")
+        (skill / "assets/.DS_Store").write_text("metadata")
+
+        rerun, _ = self.make_setup(machines, registry_path)
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertIn("[ 8/10] skill           OK       skill and bootstrap already configured", rerun.output.getvalue())
+        self.assertNotIn("copied pi skill", rerun.output.getvalue())
+
+        (skill / "SKILL.md").write_text("real content drift")
+        rerun, _ = self.make_setup(machines, registry_path)
+        self.assertEqual(rerun.run(), 0, rerun.output.getvalue())
+        self.assertIn("[ 8/10] skill           CHANGED  copied pi skill", rerun.output.getvalue())
+        archive = next(argv for argv in reversed(machines.local_commands) if argv[:1] == ["tar"])
+        self.assertEqual(archive[1:5], ["--exclude=._*", "--exclude=*/._*", "--exclude=.DS_Store", "--exclude=*/.DS_Store"])
 
     def test_rerun_on_configured_host_writes_nothing(self):
         machines, first, registry_path = self.run_zero_to_done()
