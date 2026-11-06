@@ -308,11 +308,13 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         os.chmod(str(config), 0o600); return True
 
     def remote_python3_path(self):
-        """Return the absolute Python interpreter used by remote SSH aliases."""
+        """Return the validated absolute Python interpreter used by remote SSH aliases."""
         result = self.remote_tool("command -v python3")
         paths = result.stdout.splitlines()
-        if result.returncode or len(paths) != 1 or not os.path.isabs(paths[0]):
-            raise SetupError("Could not resolve an absolute remote python3 interpreter")
+        if result.returncode or len(paths) != 1 or not re.fullmatch(r"/[A-Za-z0-9._+/-]+", paths[0]):
+            raise SetupError("Could not resolve a validated absolute remote python3 interpreter")
+        if self.remote_tool("test -x " + shlex.quote(paths[0])).returncode:
+            raise SetupError("Could not resolve a validated absolute remote python3 interpreter")
         return paths[0]
 
     def install_local_helper(self):
@@ -433,8 +435,8 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
 
     def ssh_to_origin(self):
         origin_candidates = self.candidates(remote=True)
-        remote_helper = self.remote_home_path("/.local/agent-swarm/bin/swarm-ssh-connect")
         remote_python = self.remote_python3_path() if len(origin_candidates) > 1 else None
+        remote_helper = self.remote_home_path("/.local/agent-swarm/bin/swarm-ssh-connect")
         # A working alias may still point at port 22. Check explicit ports before
         # trusting that probe, including when no local setup state exists yet.
         if len(origin_candidates) > 1 or self.origin_ssh_port != 22 or self.origin_ssh_port_explicit:

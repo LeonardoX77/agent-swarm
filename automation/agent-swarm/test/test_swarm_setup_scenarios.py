@@ -32,6 +32,7 @@ class FakeMacs:
         self.port_polls = self.authorization_polls = self.keychain_polls = 0
         self.system = "Darwin"
         self.python3_path = "/opt/new-host/bin/python3"
+        self.python3_executable = True
         self.tools = {"brew", "herdr", "node", "pi", "gentle-pi", "python3"}
         self.mounted = self.reverse_alias = self.update_installed = False
         self.update_calls, self.nonces = [], []
@@ -101,6 +102,9 @@ class FakeMacs:
             return Result(out=comment + host + " ssh-ed25519 ORIGINKEY\n")
         if command.endswith(" | ssh-keygen -lf -"):
             return Result(out="256 SHA256:ORIGINFP origin\n")
+        if command.startswith("test -x "):
+            path = shlex.split(command)[2]
+            return Result(0 if self.python3_executable and path == self.python3_path else 1)
         if command.startswith("test -f ") and "ssh-keygen -t ed25519" in command:
             key = Path(shlex.split(command)[shlex.split(command).index("-f") + 1])
             if not key.exists(): self._keypair(key, "REMOTEKEY")
@@ -280,15 +284,28 @@ class SetupScenarioTests(unittest.TestCase):
         self.assertIn("  ProxyCommand %s " % shlex.quote(sys.executable), forward)
         self.assertIn("  ProxyCommand %s " % shlex.quote(machines.python3_path), reverse)
 
-    def test_reverse_multi_candidate_alias_fails_without_an_absolute_remote_python3(self):
-        machines = FakeMacs(); self.addCleanup(machines.close)
-        machines.tools.remove("python3")
-        setup, _ = self.make_setup(machines, origin_addresses=["Origin.local", "100.64.0.1"])
-        setup.local_preflight()
-        with self.assertRaisesRegex(SetupError, "absolute remote python3 interpreter"):
-            setup.ssh_to_origin()
-        self.assertFalse((machines.remote_home / ".ssh").exists())
-        self.assertFalse((machines.remote_home / ".local/agent-swarm/bin/swarm-ssh-connect").exists())
+    def test_reverse_multi_candidate_alias_rejects_invalid_remote_python3_before_writes(self):
+        cases = (
+            ("argument", "/opt/new-host/bin/python3 --unexpected-argument", True),
+            ("relative", "bin/python3", True),
+            ("multiple lines", "/opt/new-host/bin/python3\n/other/python3", True),
+            ("not executable", "/opt/new-host/bin/python3", False),
+        )
+        for label, path, executable in cases:
+            with self.subTest(label=label):
+                machines = FakeMacs(); self.addCleanup(machines.close)
+                machines.python3_path = path
+                machines.python3_executable = executable
+                setup, _ = self.make_setup(machines, origin_addresses=["Origin.local", "100.64.0.1"])
+                setup.local_preflight()
+                with self.assertRaisesRegex(SetupError, "remote python3 interpreter"):
+                    setup.ssh_to_origin()
+                ssh = machines.remote_home / ".ssh"
+                self.assertFalse(ssh.exists())
+                self.assertFalse((ssh / "known_hosts").exists())
+                self.assertFalse((ssh / "config").exists())
+                self.assertFalse((machines.remote_home / ".local/agent-swarm/bin/swarm-ssh-connect").exists())
+                self.assertEqual(setup.results, [])
 
     def test_reverse_alias_uses_origin_registry_fallback_addresses(self):
         machines = FakeMacs(); self.addCleanup(machines.close)
