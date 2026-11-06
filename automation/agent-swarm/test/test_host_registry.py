@@ -35,6 +35,14 @@ class HostRegistryTests(unittest.TestCase):
         self.assertEqual(registry.self_host('MacMiniLeo.local')['name'], 'mac-mini')
         self.assertIsNone(registry.self_host('OtherMac'))
 
+    def test_optional_candidate_lists_are_preserved_and_validated(self):
+        value = {**VALID, 'hosts': {**VALID['hosts'], 'mac-mini': {**VALID['hosts']['mac-mini'], 'fallback_addresses': ['100.64.0.2'], 'share_hosts': ['MacBookLeo.local', '192.168.1.2']}}}
+        self.assertEqual(HostRegistry(self.write(value)).get('mac-mini')['fallback_addresses'], ['100.64.0.2'])
+        for key, entries in (('fallback_addresses', []), ('fallback_addresses', ['MacMiniLeo.local']), ('fallback_addresses', ['bad address']), ('fallback_addresses', ['-x']), ('fallback_addresses', ['--help']), ('fallback_addresses', ['-oProxyCommand']), ('share_hosts', []), ('share_hosts', ['same', 'same']), ('share_hosts', ['-x']), ('share_hosts', ['--help']), ('share_hosts', ['-oProxyCommand'])):
+            with self.subTest(key=key, entries=entries):
+                invalid = {**value, 'hosts': {**value['hosts'], 'mac-mini': {**value['hosts']['mac-mini'], key: entries}}}
+                with self.assertRaises(RegistryError): HostRegistry(self.write(invalid))
+
     def test_rejects_schema_and_host_validation_errors(self):
         cases = [
             {**VALID, 'extra': 1},

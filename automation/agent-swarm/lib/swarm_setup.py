@@ -20,7 +20,7 @@ from pathlib import Path
 from host_registry import HostRegistry, RegistryError
 
 NAME = re.compile(r"^[a-z0-9-]+$")
-ADDRESS = re.compile(r"^[A-Za-z0-9.-]+$")
+ADDRESS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 RESTRICTIONS = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding "
 PHASES = ("local-preflight", "remote-login", "ssh-to-new", "runtimes", "ssh-to-origin",
           "mount", "registry", "skill", "auto-update", "acceptance")
@@ -41,11 +41,13 @@ class Setup:
                  skip_live=False, dry_run=False, no_wait=False, wait_timeout=30, verbose=False,
                  registry=None, registry_path=None, runner=None, home=None, nodename=None,
                  tty=None, uid=None, output=None, sleep=None, clock=None, reader=None,
-                 local_system=None, ssh_port=22, origin_ssh_port=None):
+                 local_system=None, ssh_port=22, origin_ssh_port=None, fallback_addresses=(),
+                 origin_addresses=(), share_hosts=()):
         # An explicitly requested origin port (even 22) must be checked against an existing reverse alias.
         self.origin_ssh_port_explicit = origin_ssh_port is not None
         self.ssh_port, self.origin_ssh_port = ssh_port, 22 if origin_ssh_port is None else origin_ssh_port
         self.name, self.address, self.user, self.role = name, address, user, role
+        self.fallback_addresses, self.origin_addresses, self.share_hosts = list(fallback_addresses), list(origin_addresses), list(share_hosts)
         self.host_fingerprint, self.origin_user = host_fingerprint, origin_user
         self.auto_update, self.update_time, self.install_missing = auto_update, update_time, install_missing
         self.skip_live, self.dry_run, self.no_wait, self.wait_timeout, self.verbose = skip_live, dry_run, no_wait, wait_timeout, verbose
@@ -200,8 +202,9 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
             if self.clock() >= deadline: raise Waiting(text)
             self.sleep(5)
 
-    def mark(self, phase, status, detail=""):
-        self.state["phases"][phase] = {"status": status, "timestamp": int(self.clock()), "last_error": detail or None}; self._save_state()
+    def mark(self, phase, status, detail="", persist=True):
+        self.state["phases"][phase] = {"status": status, "timestamp": int(self.clock()), "last_error": detail or None}
+        if persist: self._save_state()
         self.emit("[%2d/10] %-15s %-8s %s" % (self.phase_names.index(phase) + 1, phase, status.upper(), detail))
         self.results.append((phase, status, detail))
         if status == "changed": self.changed.append(phase)
@@ -210,14 +213,25 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
     def result(status, detail): return status, detail
 
     def local_preflight(self):
-        if not NAME.fullmatch(self.name) or not ADDRESS.fullmatch(self.address) or not self.user: raise SetupError("Invalid host name, address, or user")
+        candidate_values = [self.address, *self.fallback_addresses, *self.origin_addresses, *self.share_hosts]
+        if (not NAME.fullmatch(self.name) or not self.user or any(not ADDRESS.fullmatch(value) for value in candidate_values)
+                or len(self.fallback_addresses) != len(set(self.fallback_addresses)) or self.address in self.fallback_addresses
+                or len(self.origin_addresses) != len(set(self.origin_addresses)) or len(self.share_hosts) != len(set(self.share_hosts))
+                or (self.role == "hub" and self.share_hosts)):
+            raise SetupError("Invalid host name, address, or user")
         self.origin = self.registry.self_host(self.nodename)
         if not self.origin: raise SetupError("This host is not the registry self_host")
         for option, alias, phase in (("ssh_port", self.name, "ssh-to-new"), ("origin_ssh_port", self.origin["name"], "ssh-to-origin")):
             configured = self.state["phases"].get(phase, {}).get("status") in ("ok", "changed")
             if (option in self.state or configured) and self.state.get(option, 22) != getattr(self, option):
                 raise SetupError("SSH alias conflict for swarm-" + alias)
-        self.state.update(ssh_port=self.ssh_port, origin_ssh_port=self.origin_ssh_port)
+        candidates = self.candidates()
+        origin_candidates = self.candidates(remote=True)
+        for key, values, alias in (("candidates", candidates, self.name), ("origin_candidates", origin_candidates, self.origin["name"])):
+            configured = self.state["phases"].get("ssh-to-new" if key == "candidates" else "ssh-to-origin", {}).get("status") in ("ok", "changed")
+            if configured and self.state.get(key, values) != values:
+                raise SetupError("SSH alias conflict for swarm-" + alias)
+        self.state.update(ssh_port=self.ssh_port, origin_ssh_port=self.origin_ssh_port, candidates=candidates, origin_candidates=origin_candidates)
         existing = self.registry.hosts.get(self.name)
         if existing and existing["address"] != self.address: raise SetupError("Existing host address does not match")
         for tool in ("ssh", "ssh-keygen", "ssh-keyscan"):
@@ -225,17 +239,31 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         self.origin_user = self.origin_user or self.origin.get("user") or getpass.getuser()
         return self.result("ok", "origin preflight passed")
 
+    def candidates(self, remote=False):
+        if remote:
+            if self.origin_addresses:
+                return list(self.origin_addresses)
+            return [self.origin["address"], *self.origin.get("fallback_addresses", [])]
+        return [self.address, *self.fallback_addresses]
+
+    def first_reachable(self, candidates, port):
+        for candidate in candidates:
+            if self.socket_check(candidate, port):
+                return candidate
+        return None
+
     def remote_login(self):
-        if not self.socket_check(self.address, self.ssh_port): self.wait_for("On %s: enable macOS Remote Login or a running sshd on Linux for user %s" % (self.name, self.user), lambda: self.socket_check(self.address, self.ssh_port))
+        candidates = self.candidates()
+        if not self.first_reachable(candidates, self.ssh_port): self.wait_for("On %s: enable macOS Remote Login or a running sshd on Linux for user %s" % (self.name, self.user), lambda: self.first_reachable(candidates, self.ssh_port))
         return self.result("ok", "Remote Login reachable")
 
     @staticmethod
     def port_args(port):
         return [] if port == 22 else ["-p", str(port)]
 
-    def keyscan_args(self, remote=False):
+    def keyscan_args(self, remote=False, address=None):
         port = self.origin_ssh_port if remote else self.ssh_port
-        address = self.origin["address"] if remote else self.address
+        address = address or self.candidates(remote)[0]
         return ["ssh-keyscan", *self.port_args(port), "-t", "ed25519", address]
 
     def fingerprint(self, scan=False, remote=False):
@@ -249,11 +277,15 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         return match.group(1)
 
     @staticmethod
-    def alias_block(alias, address, user, key, port=22):
+    def alias_block(alias, address, user, key, port=22, candidates=None, helper=None):
+        if candidates and len(candidates) > 1:
+            command = "  ProxyCommand %s %s --port %s -- %s\n" % (shlex.quote(sys.executable), shlex.quote(str(helper)), port, " ".join(shlex.quote(value) for value in candidates))
+            quoted_key = '"' + key.replace('\\', '\\\\').replace('"', '\\"') + '"'
+            return ("Host %s\n  HostKeyAlias %s\n%s  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ForwardAgent no\n" % (alias, alias, command, user, quoted_key))
         return ("Host %s\n  HostName %s\n%s  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ForwardAgent no\n" % (alias, address, "" if port == 22 else "  Port %s\n" % port, user, key))
 
-    def write_alias(self, config, alias, address, user, key, port=22, check_only=False):
-        block = self.alias_block(alias, address, user, key, port)
+    def write_alias(self, config, alias, address, user, key, port=22, check_only=False, candidates=None, helper=None):
+        block = self.alias_block(alias, address, user, key, port, candidates, helper)
         prior = config.read_text(encoding="utf-8") if config.exists() else ""
         found = re.search(r"(?ms)^Host " + re.escape(alias) + r"\s*$.*?(?=^Host |\Z)", prior)
         if found:
@@ -265,9 +297,32 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         with config.open("a", encoding="utf-8") as target: target.write(("\n" if prior and not prior.endswith("\n") else "") + block)
         os.chmod(str(config), 0o600); return True
 
+    def install_local_helper(self):
+        source = Path(__file__).resolve().parents[3] / "automation/agent-swarm/bin/swarm-ssh-connect"
+        destination = self.home / ".local/agent-swarm/bin/swarm-ssh-connect"
+        if not destination.exists() or destination.read_bytes() != source.read_bytes():
+            destination.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(source, destination); os.chmod(destination, 0o755)
+            return True
+        return False
+
+    def candidate_scans(self, remote=False):
+        scans, failures = [], []
+        for candidate in self.candidates(remote):
+            result = self.remote(" ".join(shlex.quote(x) for x in self.keyscan_args(remote=True, address=candidate))) if remote else self.command(self.keyscan_args(address=candidate))
+            lines = [line for line in result.stdout.splitlines() if line]
+            if result.returncode or not lines:
+                failures.append(candidate); continue
+            fingerprint = self.remote("printf %s | ssh-keygen -lf -" % shlex.quote(result.stdout)).stdout if remote else self.command(["ssh-keygen", "-lf", "-"], input=result.stdout).stdout
+            match = re.search(r"(SHA256:[A-Za-z0-9+/=]+)", fingerprint or "")
+            if not match: raise SetupError("Could not scan SSH host key")
+            scans.append((candidate, lines, match.group(1)))
+        if not scans: raise SetupError("Could not scan SSH host key")
+        return scans, failures
+
     def ssh_to_new(self):
+        candidates = self.candidates(); helper = self.home / ".local/agent-swarm/bin/swarm-ssh-connect"
         key = self.home / ".ssh" / ("agent_swarm_" + self.name.replace("-", "_"))
-        self.write_alias(self.home / ".ssh/config", "swarm-" + self.name, self.address, self.user, str(key), self.ssh_port, check_only=True)
+        self.write_alias(self.home / ".ssh/config", "swarm-" + self.name, self.address, self.user, str(key), self.ssh_port, check_only=True, candidates=candidates, helper=helper)
         if self.command(["ssh", "-o", "BatchMode=yes", "swarm-" + self.name, "true"]).returncode == 0: return self.result("ok", "SSH alias already configured")
         changed = False
         if not key.exists():
@@ -276,18 +331,31 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
                 key.parent.mkdir(parents=True, exist_ok=True); os.chmod(str(key.parent), 0o700)
                 if self.command(["ssh-keygen", "-t", "ed25519", "-f", str(key), "-N", "", "-C", "agent-swarm-to-" + self.name]).returncode: raise SetupError("Could not create SSH key")
                 changed = True
-        observed = self.fingerprint(scan=True)
+        if len(candidates) == 1:
+            observed = self.fingerprint(scan=True); scans, failures = [(candidates[0], [], observed)], []
+        else:
+            scans, failures = self.candidate_scans(); observed = scans[0][2]
+            if any(scan[2] != observed for scan in scans): raise SetupError("SSH host fingerprint mismatch")
+            for candidate in failures: self.emit("SSH candidate unreachable: " + candidate)
         if self.host_fingerprint and observed != self.host_fingerprint: raise SetupError("SSH host fingerprint mismatch")
         if not self.host_fingerprint:
             hint = "Re-run with --host-fingerprint %s" % observed
             if not self.tty: raise Waiting("Host-key confirmation requires a TTY. " + hint)
-            answer = self.reader("Type the fingerprint shown on %s (or yes): " % self.name).strip()
-            if answer not in ("yes", observed): raise SetupError("SSH host fingerprint mismatch")
+            if self.reader("Type the fingerprint shown on %s (or yes): " % self.name).strip() not in ("yes", observed): raise SetupError("SSH host fingerprint mismatch")
         if self.dry_run: return self.result("changed", "would configure SSH channel")
-        scan = self.command(self.keyscan_args()); known = self.home / ".ssh/known_hosts"
-        lines = [line for line in scan.stdout.splitlines() if line]
-        if scan.returncode or not lines: raise SetupError("Could not scan SSH host key")
+        known = self.home / ".ssh/known_hosts"
+        if len(candidates) == 1:
+            scan = self.command(self.keyscan_args()); lines = [line for line in scan.stdout.splitlines() if line]
+            if scan.returncode or not lines: raise SetupError("Could not scan SSH host key")
+        else:
+            key_fields = scans[0][1][0].split(maxsplit=2)
+            lines = ["swarm-%s %s %s" % (self.name, key_fields[1], key_fields[2])]
         prior = known.read_text(encoding="utf-8") if known.exists() else ""
+        if len(candidates) > 1:
+            alias = "swarm-" + self.name
+            stale = [line for line in prior.splitlines() if line.split(maxsplit=1) and line.split(maxsplit=1)[0] == alias and line not in lines]
+            if stale:
+                raise SetupError("SSH known_hosts entry for %s differs; verify and remove the stale entry before re-running" % alias)
         missing_lines = [line for line in lines if line not in prior.splitlines()]
         if missing_lines:
             known.parent.mkdir(parents=True, exist_ok=True)
@@ -297,9 +365,9 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         try: line = RESTRICTIONS + public.read_text(encoding="utf-8").strip()
         except OSError: raise SetupError("Could not read SSH public key")
         authorization = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && { touch ~/.ssh/authorized_keys && grep -qxF %s ~/.ssh/authorized_keys || printf '%%s\\n' %s >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys" % (shlex.quote(line), shlex.quote(line))
-        instruction = "On %s run this exact command, then continue:\n%s" % (self.name, authorization)
-        self.wait_for(instruction, lambda: self.command(["ssh", *self.port_args(self.ssh_port), "-i", str(key), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", self.user + "@" + self.address, "true"]).returncode == 0)
-        changed = self.write_alias(self.home / ".ssh/config", "swarm-" + self.name, self.address, self.user, str(key), self.ssh_port) or changed
+        self.wait_for("On %s run this exact command, then continue:\n%s" % (self.name, authorization), lambda: self.command(["ssh", *self.port_args(self.ssh_port), "-i", str(key), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", self.user + "@" + ((self.first_reachable(candidates, self.ssh_port) or candidates[0]) if len(candidates) > 1 else candidates[0]), "true"]).returncode == 0)
+        if len(candidates) > 1: changed = self.install_local_helper() or changed
+        changed = self.write_alias(self.home / ".ssh/config", "swarm-" + self.name, self.address, self.user, str(key), self.ssh_port, candidates=candidates, helper=helper) or changed
         return self.result("changed" if changed else "ok", "configured SSH channel" if changed else "SSH alias already configured")
 
     def runtimes(self):
@@ -343,13 +411,15 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         if self.remote_tool(command).returncode: raise SetupError("Could not install remote file " + destination)
 
     def ssh_to_origin(self):
+        origin_candidates = self.candidates(remote=True)
+        remote_helper = self.remote_home_path("/.local/agent-swarm/bin/swarm-ssh-connect")
         # A working alias may still point at port 22. Check explicit ports before
         # trusting that probe, including when no local setup state exists yet.
-        if self.origin_ssh_port != 22 or self.origin_ssh_port_explicit:
+        if len(origin_candidates) > 1 or self.origin_ssh_port != 22 or self.origin_ssh_port_explicit:
             home = self.remote_home_path()
             alias = "swarm-" + self.origin["name"]
             key = home + "/.ssh/agent_swarm_" + self.origin["name"].replace("-", "_")
-            block = self.alias_block(alias, self.origin["address"], self.origin_user, key, self.origin_ssh_port)
+            block = self.alias_block(alias, origin_candidates[0], self.origin_user, key, self.origin_ssh_port, origin_candidates, remote_helper)
             program = """import json,pathlib,re,sys
 p=pathlib.Path(json.loads(sys.argv[1])); block=json.loads(sys.argv[2]); alias=json.loads(sys.argv[3])
 s=p.read_text() if p.exists() else ''
@@ -364,17 +434,29 @@ if m and m.group(0).strip()!=block.strip(): raise SystemExit(9)
         home, key = self.remote_home_path(), None
         key = home + "/.ssh/agent_swarm_" + self.origin["name"].replace("-", "_")
         if self.remote("test -f %s || ssh-keygen -t ed25519 -f %s -N '' -C %s" % (shlex.quote(key), shlex.quote(key), shlex.quote("agent-swarm-to-" + self.origin["name"]))).returncode: raise SetupError("Could not create reverse SSH key")
-        if self.fingerprint() != self.fingerprint(scan=True, remote=True): raise SetupError("Origin SSH host fingerprint mismatch")
-        origin_scan = self.remote(" ".join(shlex.quote(x) for x in self.keyscan_args(remote=True)))
-        origin_lines = [line for line in origin_scan.stdout.splitlines() if line]
-        if origin_scan.returncode or not origin_lines: raise SetupError("Could not scan origin SSH host key")
+        if len(origin_candidates) == 1:
+            if self.fingerprint() != self.fingerprint(scan=True, remote=True): raise SetupError("Origin SSH host fingerprint mismatch")
+            origin_scan = self.remote(" ".join(shlex.quote(x) for x in self.keyscan_args(remote=True)))
+            origin_lines = [line for line in origin_scan.stdout.splitlines() if line]
+            if origin_scan.returncode or not origin_lines: raise SetupError("Could not scan origin SSH host key")
+        else:
+            scans, failures = self.candidate_scans(remote=True); observed = scans[0][2]
+            if any(scan[2] != observed for scan in scans) or self.fingerprint() != observed: raise SetupError("Origin SSH host fingerprint mismatch")
+            for candidate in failures: self.emit("SSH candidate unreachable: " + candidate)
+            fields = scans[0][1][0].split(maxsplit=2); origin_lines = ["swarm-%s %s %s" % (self.origin["name"], fields[1], fields[2])]
         known_program = """import json,pathlib,sys
-p=pathlib.Path(json.loads(sys.argv[1])); lines=json.loads(sys.argv[2]); s=p.read_text() if p.exists() else ''; existing=s.splitlines(); missing=[line for line in lines if line not in existing]
+p=pathlib.Path(json.loads(sys.argv[1])); lines=json.loads(sys.argv[2]); alias=json.loads(sys.argv[3]); s=p.read_text() if p.exists() else ''; existing=s.splitlines()
+stale=[line for line in existing if alias and line.split(maxsplit=1) and line.split(maxsplit=1)[0]==alias and line not in lines]
+if stale: raise SystemExit(10)
+missing=[line for line in lines if line not in existing]
 if missing:
  p.parent.mkdir(parents=True,exist_ok=True)
  p.write_text(s+('' if not s or s.endswith('\\n') else '\\n')+'\\n'.join(missing)+'\\n')
 """
-        if self.remote_python(known_program, (home + "/.ssh/known_hosts", origin_lines)).returncode: raise SetupError("Could not configure origin known hosts")
+        configured_known = self.remote_python(known_program, (home + "/.ssh/known_hosts", origin_lines, "swarm-" + self.origin["name"] if len(origin_candidates) > 1 else None))
+        if configured_known.returncode == 10:
+            raise SetupError("SSH known_hosts entry for swarm-%s differs; verify and remove the stale entry before re-running" % self.origin["name"])
+        if configured_known.returncode: raise SetupError("Could not configure origin known hosts")
         public = self.remote("cat " + shlex.quote(key + ".pub"))
         if public.returncode: raise SetupError("Could not read reverse SSH public key")
         authorized = self.home / ".ssh/authorized_keys"; line = RESTRICTIONS + public.stdout.strip(); previous = authorized.read_text() if authorized.exists() else ""
@@ -383,7 +465,8 @@ if missing:
             if authorized.exists(): authorized.with_name("authorized_keys.swarm-setup-%s.bak" % int(self.clock())).write_text(previous)
             with authorized.open("a") as target: target.write(("" if not previous or previous.endswith("\n") else "\n") + line + "\n")
         alias = "swarm-" + self.origin["name"]
-        block = self.alias_block(alias, self.origin["address"], self.origin_user, key, self.origin_ssh_port)
+        if len(origin_candidates) > 1: self._remote_copy(Path(__file__).resolve().parents[3] / "automation/agent-swarm/bin/swarm-ssh-connect", "~/.local/agent-swarm/bin/swarm-ssh-connect")
+        block = self.alias_block(alias, origin_candidates[0], self.origin_user, key, self.origin_ssh_port, origin_candidates, remote_helper)
         program = """import json,pathlib,re,sys,time
 p=pathlib.Path(json.loads(sys.argv[1])); block=json.loads(sys.argv[2]); s=p.read_text() if p.exists() else ''
 m=re.search(r'(?ms)^Host '+re.escape(json.loads(sys.argv[3]))+r'\\s*$.*?(?=^Host |\\Z)',s)
@@ -405,8 +488,8 @@ if not m:
     def mount(self):
         if self.role != "spoke": return self.result("skipped", "skipped for hub role")
         system = self.remote_system_name()
-        share = self.registry.share; vals = tuple(shlex.quote(share[x]) for x in ("host", "name", "user")); tool = self.remote_home_path("/.local/agent-swarm/bin/swarm-smb-mount")
-        check = "%s status --host %s --share %s --user %s" % ((shlex.quote(tool),) + vals)
+        share = self.registry.share; hosts = self.share_hosts or [share["host"]]; host_args = " ".join("--host " + shlex.quote(host) for host in hosts); vals = tuple(shlex.quote(share[x]) for x in ("name", "user")); tool = self.remote_home_path("/.local/agent-swarm/bin/swarm-smb-mount")
+        check = "%s status %s --share %s --user %s" % (shlex.quote(tool), host_args, *vals)
         warnings = []
         def details(result):
             try: data = json.loads(result.stdout)
@@ -423,19 +506,20 @@ if not m:
         if mounted(): return self.result("ok", detail("catalog already mounted"))
         if self.dry_run: return self.result("changed", "would install persistent SMB mount")
         self._remote_copy(Path(__file__).resolve().parents[3] / "automation/agent-swarm/bin/swarm-smb-mount", "~/.local/agent-swarm/bin/swarm-smb-mount")
-        command = "%s mount --host %s --share %s --user %s --persistent" % ((shlex.quote(tool),) + vals)
+        command = "%s mount %s --share %s --user %s --persistent" % (shlex.quote(tool), host_args, *vals)
         result = self.remote_tool(command, 120)
         details(result)
         if result.returncode:
             instruction = "On %s, connect in Finder to smb://%s@%s/%s and save the password" % (self.name, share["user"], share["host"], share["name"])
             if system == "Linux":
-                example = self.remote_tool("%s fstab-line --host %s --share %s --user %s" % ((shlex.quote(tool),) + vals))
+                example = self.remote_tool("%s fstab-line %s --share %s --user %s" % (shlex.quote(tool), host_args, *vals))
                 try: fstab = json.loads(example.stdout)
                 except (TypeError, ValueError): raise SetupError("Could not generate Linux fstab instructions")
-                if example.returncode or not fstab.get("fstab_line"): raise SetupError("Could not generate Linux fstab instructions")
-                instruction = ("On %s: as root, create %s and add this exact line to /etc/fstab:\n%s\n"
+                lines = fstab.get("fstab_lines") or ([fstab["fstab_line"]] if fstab.get("fstab_line") else [])
+                if example.returncode or not lines: raise SetupError("Could not generate Linux fstab instructions")
+                instruction = ("On %s: as root, create %s and add these exact lines to /etc/fstab:\n%s\n"
                                "Create ~/.config/agent-swarm/smb-credentials yourself with mode 0600 (the tool never creates credentials):\n%s"
-                               "Then run: %s" % (self.name, self.catalog_path(), fstab["fstab_line"], fstab["credentials_template"], command))
+                               "Then run: %s" % (self.name, self.catalog_path(), "\n".join(lines), fstab["credentials_template"], command))
             self.wait_for(instruction, mounted)
         if self.remote_tool("test -d " + shlex.quote(self.catalog_path())).returncode: raise SetupError("Catalog is not visible after mount")
         return self.result("changed", detail("mounted catalog"))
@@ -459,7 +543,10 @@ if not m:
         if self.role == "spoke":
             catalog = self.catalog_path()
         facts = self.remote_facts()
-        return {"hostname_prefix": facts["hostname_prefix"], "role": self.role, "ssh_alias": "swarm-" + self.name, "address": self.address, "catalog_root": catalog, "repo": str(Path(catalog) / relative), "path": facts["path"], "gui_cwd": self.remote_home_path("/tmp"), "runtimes": ["pi"] + (["claude"] if facts["claude"] else [])}
+        entry = {"hostname_prefix": facts["hostname_prefix"], "role": self.role, "ssh_alias": "swarm-" + self.name, "address": self.address, "catalog_root": catalog, "repo": str(Path(catalog) / relative), "path": facts["path"], "gui_cwd": self.remote_home_path("/tmp"), "runtimes": ["pi"] + (["claude"] if facts["claude"] else [])}
+        if self.fallback_addresses: entry["fallback_addresses"] = list(self.fallback_addresses)
+        if self.share_hosts: entry["share_hosts"] = list(self.share_hosts)
+        return entry
 
     def registry_phase(self):
         entry = self.build_registry_entry(); self.generated_registry_entry = entry; existing = self.registry.hosts.get(self.name)
@@ -604,7 +691,7 @@ if n!=s:
         except Waiting as error:
             phase = PHASES[len(self.results)]; self.mark(phase, "waiting", str(error)); self.emit("Waiting for a person: %s. Re-run the same command to resume." % error); return 10
         except (SetupError, RegistryError) as error:
-            phase = PHASES[min(len(self.results), len(PHASES)-1)]; self.mark(phase, "failed", str(error)); return 1
+            phase = PHASES[min(len(self.results), len(PHASES)-1)]; self.mark(phase, "failed", str(error), persist=bool(self.results)); return 1
         except Exception as error:
             phase = PHASES[min(len(self.results), len(PHASES)-1)]; self.mark(phase, "failed", "Unexpected %s (see log)" % error.__class__.__name__)
             self._log(traceback.format_exc().rstrip())
