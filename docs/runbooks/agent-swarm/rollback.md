@@ -14,7 +14,7 @@ Remove only artifacts created by a current Agent Swarm onboarding, on the local 
 | Onboarding resource | Permitted local rollback |
 | --- | --- |
 | Local registry (`config/hosts.json`, unversioned) | Remove or correct only the approved entry; first make a copy and verify it contains no unrelated changes. |
-| Dedicated SSH key and alias | Remove only the keypair and `Host swarm-<target>` block created for that direction. Never delete a reused key. |
+| Dedicated SSH key and alias | Remove only the keypair and `Host swarm-<target>` block created for that direction. For a multi-candidate alias, remove its alias-keyed `known_hosts` line too; remove `~/.local/agent-swarm/bin/swarm-ssh-connect` only when no other alias uses it. Never delete a reused key. |
 | `authorized_keys` | Remove only the line added for the dedicated key, retaining other entries and backups. |
 | Persistent SMB mount | Use `swarm-smb-mount unmount --remove-persistent` with registered-share values; it removes only that mount and LaunchAgent. |
 | Skill and bootstrap | Remove only the copy and bootstrap block created for the new host, after confirming they serve no other channel. |

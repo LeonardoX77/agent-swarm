@@ -10,7 +10,7 @@ Use names and values from `config/hosts.json`; do not copy host names, users, or
 | --- | --- |
 | `<origin>` | Name of the host that starts SSH. |
 | `<target>` | Registry name of the destination host (`[a-z0-9-]`). |
-| `<host>` | Confirmed destination LAN/Tailscale address or name. |
+| `<host>` | Confirmed destination LAN/Tailscale address or name; the first candidate when failover is configured. |
 | `<user>` | Authorized account at the destination. |
 | `<key>` | `~/.ssh/agent_swarm_<target>` at the origin. |
 
@@ -70,11 +70,12 @@ no-agent-forwarding,no-port-forwarding,no-X11-forwarding
 
 ### 5. Create the alias at the origin
 
-**Agent — at `<origin>`.** Add to `~/.ssh/config`:
+**Agent — at `<origin>`.** A single candidate keeps the existing alias shape:
 
 ```sshconfig
 Host swarm-<target>
   HostName <host>
+  Port <port> # written only when it is not 22
   User <user>
   IdentityFile ~/.ssh/agent_swarm_<target>
   IdentitiesOnly yes
@@ -85,6 +86,18 @@ Host swarm-<target>
   ServerAliveCountMax 4
   ForwardAgent no
 ```
+
+With two or more ordered candidates, the alias instead has `HostKeyAlias swarm-<target>` and a `ProxyCommand` equivalent to:
+
+```sshconfig
+Host swarm-<target>
+  HostKeyAlias swarm-<target>
+  ProxyCommand /usr/bin/python3 ~/.local/agent-swarm/bin/swarm-ssh-connect --port <port> -- <candidate-1> <candidate-2>
+```
+
+The setup copies `swarm-ssh-connect` to `~/.local/agent-swarm/bin/swarm-ssh-connect` **on the side that runs SSH**. It tries candidates in order. Each unreachable candidate costs at most the helper's per-candidate connect timeout.
+
+For a multi-candidate alias, `known_hosts` has one line keyed by `swarm-<target>`, not one line per address. Every reachable candidate must present that human-verified key; one presenting another key fails closed. Unreachable candidates are reported but not trusted separately. If that alias-keyed line already exists with a different key, setup stops until a human verifies and removes the stale line. Apply the same rule in the reverse direction.
 
 When reusing a key, retain its `IdentityFile`; all other controls remain mandatory.
 
@@ -102,7 +115,7 @@ Once both directions respond, confirm registry and catalog with `swarm-delegate 
 
 ## Per-direction rollback
 
-**Agent — with authorization.** Remove the `Host swarm-<target>` block from the origin, the added `authorized_keys` entry at the destination (or restore the backup if it contains only this change), and the dedicated `agent_swarm_<target>` key pair at the origin. Do not remove a reused key or a backup containing unrelated changes.
+**Agent — with authorization.** Remove the `Host swarm-<target>` block from the origin, the added `authorized_keys` entry at the destination (or restore the backup if it contains only this change), and the dedicated `agent_swarm_<target>` key pair at the origin. For a multi-candidate alias, also remove its alias-keyed `known_hosts` line. Remove `~/.local/agent-swarm/bin/swarm-ssh-connect` only when no other alias uses it. Do not remove a reused key or a backup containing unrelated changes.
 
 ## Final check
 

@@ -10,7 +10,7 @@ Use nombres y valores del registro `config/hosts.json`; no copie nombres de host
 | --- | --- |
 | `<origin>` | Nombre del host que inicia SSH. |
 | `<target>` | Nombre de registro del host destino (`[a-z0-9-]`). |
-| `<host>` | Dirección LAN/Tailscale o nombre confirmado del destino. |
+| `<host>` | Dirección LAN/Tailscale o nombre confirmado del destino; el primer candidato cuando se configura failover. |
 | `<user>` | Cuenta autorizada en el destino. |
 | `<key>` | `~/.ssh/agent_swarm_<target>` en el origen. |
 
@@ -70,11 +70,12 @@ no-agent-forwarding,no-port-forwarding,no-X11-forwarding
 
 ### 5. Crear el alias en el origen
 
-**Agente — en `<origin>`.** Añada a `~/.ssh/config`:
+**Agente — en `<origin>`.** Un único candidato conserva la forma de alias existente:
 
 ```sshconfig
 Host swarm-<target>
   HostName <host>
+  Port <port> # sólo se escribe si no es 22
   User <user>
   IdentityFile ~/.ssh/agent_swarm_<target>
   IdentitiesOnly yes
@@ -85,6 +86,18 @@ Host swarm-<target>
   ServerAliveCountMax 4
   ForwardAgent no
 ```
+
+Con dos o más candidatos ordenados, el alias usa en su lugar `HostKeyAlias swarm-<target>` y un `ProxyCommand` equivalente a:
+
+```sshconfig
+Host swarm-<target>
+  HostKeyAlias swarm-<target>
+  ProxyCommand /usr/bin/python3 ~/.local/agent-swarm/bin/swarm-ssh-connect --port <port> -- <candidate-1> <candidate-2>
+```
+
+El setup copia `swarm-ssh-connect` en `~/.local/agent-swarm/bin/swarm-ssh-connect` **en el lado que ejecuta SSH**. Prueba los candidatos en orden. Cada candidato inalcanzable consume como máximo el timeout de conexión por candidato del helper.
+
+Para un alias con varios candidatos, `known_hosts` tiene una sola línea asociada a `swarm-<target>`, no una por dirección. Todo candidato alcanzable debe presentar esa clave verificada por la persona; uno que presente otra clave falla de forma cerrada. Los candidatos inalcanzables se informan, pero no se confían por separado. Si ya existe esa línea asociada al alias con una clave distinta, el setup se detiene hasta que una persona verifique y elimine la línea obsoleta. Aplique la misma regla en la dirección inversa.
 
 Al reutilizar una clave existente, conserve su `IdentityFile`; el resto de controles sigue siendo obligatorio.
 
@@ -102,7 +115,7 @@ Una vez que ambas direcciones responden, confirme el registro y el catálogo con
 
 ## Reversión por dirección
 
-**Agente — con autorización.** Quite el bloque `Host swarm-<target>` del origen, la entrada que se añadió a `authorized_keys` en el destino (o restaure la copia de seguridad si sólo contiene este cambio), y el par de clave dedicada `agent_swarm_<target>` del origen. No elimine una clave reutilizada ni una copia de seguridad con cambios ajenos.
+**Agente — con autorización.** Quite el bloque `Host swarm-<target>` del origen, la entrada que se añadió a `authorized_keys` en el destino (o restaure la copia de seguridad si sólo contiene este cambio), y el par de clave dedicada `agent_swarm_<target>` del origen. Para un alias con varios candidatos, quite también su línea de `known_hosts` asociada al alias. Retire `~/.local/agent-swarm/bin/swarm-ssh-connect` sólo cuando ningún otro alias lo use. No elimine una clave reutilizada ni una copia de seguridad con cambios ajenos.
 
 ## Comprobación final
 

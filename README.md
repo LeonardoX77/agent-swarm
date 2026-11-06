@@ -120,7 +120,7 @@ automation/agent-swarm/bin/swarm-setup add-host \
   --install-missing --no-auto-update
 ```
 
-Drop `--no-auto-update` to enable daily updates (04:30 by default) on either platform. A node set up before that phase existed has no updater: run `automation/agent-swarm/bin/swarm-update install` on it. Herdr is upgraded but its server is never restarted; the run only reports `server restart pending` in `swarm-update` output and its log, so restart it yourself when convenient. If the command stops waiting for an action, do it and **run the same command again**: it continues from the pending phase.
+Drop `--no-auto-update` to enable daily updates (04:30 by default) on either platform. A node set up before that phase existed has no updater: run `automation/agent-swarm/bin/swarm-update install` on it. Herdr is upgraded but its server is never restarted; the run only reports `server restart pending` in `swarm-update` output and its log, so restart it yourself when convenient. If the command stops waiting for an action, do it and **run the same command again**: it continues from the pending phase. Where SSH/Tailscale needs resilience, `--address` can be followed by ordered repeatable `--fallback-address` candidates (typically MagicDNS first, LAN second); SSH tries them in order.
 
 For **Linux/WSL**, prepare SSH, Node, Python 3, and Pi, make the Herdr server available, and complete Pi login locally. `--install-missing` can install Herdr using the official installer from https://herdr.dev/install.sh (downloaded to a temporary file and run only if the download succeeds; requires curl), and gentle-pi via Pi. Homebrew is not required.
 
