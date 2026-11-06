@@ -38,7 +38,7 @@ Evidence reported by the owner of the real run (not repeated by simulated tests)
 | Area | Historical observation | Limit |
 | --- | --- | --- |
 | Own session | A dedicated tab and Pi agent responded to a nonce and were cleaned up without closing pre-existing resources. | Does not prove complete isolation or production guarantees. |
-| Pi startup | In real acceptance, Herdr returned an idle agent immediately after `agent start`; the adapter kept the ledger at `start_intent` and acceptance became `unknown`. Repeating the same setup passed. | Evidence of a possible startup race, not a confirmed or fixed cause. Add a deterministic delayed-ready-agent test and verify acceptance is not declared failed or blindly resent. |
+| Pi startup | **Reproduced on the real WSL node:** at `21:53:53.068` `tab.create` spawned pane 3; `agent.start` errored at `.080`, returned `ok` at `.183`, and Pi was registered only at `.622`. The ledger remained `unknown` at `start_intent` and no prompt was sent. The adapter now polls `herdr agent get <pane_id>` every roughly 0.5 seconds, using a bounded start deadline, before declaring `unknown`; it records `started` and sends the prompt only after strict ownership identity is confirmed. | This protects the observed registration race without retrying `agent start` or blindly resending a prompt. Validate the bounded behavior against future Herdr/Pi runtime versions. |
 | JSONL result | The adapter found the exact user message and a descendant final response in its own session JSONL. | Screen snapshots alone do not correlate a turn. |
 | Ledger | Persisting intent before create, start, submit, and close retained ambiguous states for recovery. | It provides neither distributed exactly-once nor automatic resend authorization. |
 | Envelope | The valid contract has six fields and `mode: executor`; extra fields or unsupported modes are rejected. | Validation does not replace human scope control. |
@@ -57,7 +57,7 @@ Herdr can emit typed errors on stdout or stderr, and `herdr agent prompt` reject
 2. Verify at every deployment the restricted SMB catalog, aliases, fingerprints, and both SSH directions.
 3. Keep Pi login and credentials local to the host; a GUI observation does not prove separate noninteractive authentication.
 4. Coordinate human writers: the channel implements neither locks nor conflict resolution.
-5. Reproduce and cover the possible race between `herdr agent start` and Pi's effective readiness before modifying the adapter; distinguish an idle agent with no received turn from a valid final answer and avoid blind resend.
+5. Revalidate the reproduced `herdr agent start`/Pi registration race when deploying a new Herdr or Pi runtime; the adapter now waits for strict identity through bounded `agent get` polling, never retries `agent start`, and never sends a prompt before ownership is confirmed.
 6. Treat every runtime or protocol change as new work requiring new evidence.
 
 ## Available local evidence

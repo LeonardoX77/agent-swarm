@@ -236,7 +236,7 @@ class Controller:
             report['last_error'] = self.last_error
         return report
 
-    def submit(self, raw):
+    def submit(self, raw, *, clock=time.monotonic, sleep=time.sleep):
         self.last_error = None
         envelope = _envelope(raw)
         # project is always a safe relative path below the selected catalog root.
@@ -275,11 +275,26 @@ class Controller:
         candidate = {'result': started} if started else None
         owned = self._identity(record, candidate) if candidate else None
         if not owned:
-            return self._unknown(envelope['task_id'], 'start_intent')
-        identity = self._call([str(self.herdr), 'agent', 'get', owned[0]])
-        owned = self._identity(record, identity)
-        if not owned:
-            return self._unknown(envelope['task_id'], 'start_intent')
+            deadline = clock() + self.timeout
+            while not owned:
+                if clock() >= deadline:
+                    return self._unknown(envelope['task_id'], 'start_intent')
+                identity = self._call([str(self.herdr), 'agent', 'get', record['bindings']['pane_id']])
+                owned = self._identity(record, identity)
+                if owned:
+                    break
+                remaining = deadline - clock()
+                if remaining <= 0:
+                    return self._unknown(envelope['task_id'], 'start_intent')
+                try:
+                    sleep(min(0.5, remaining))
+                except KeyboardInterrupt:
+                    return self._unknown(envelope['task_id'], 'start_intent')
+        else:
+            identity = self._call([str(self.herdr), 'agent', 'get', owned[0]])
+            owned = self._identity(record, identity)
+            if not owned:
+                return self._unknown(envelope['task_id'], 'start_intent')
         record = self.ledger.update(envelope['task_id'], 'started', 'start_intent', {'agent_id': owned[0]})
         record = self.ledger.update(envelope['task_id'], 'submit_intent', 'started')
         accepted = self._result(self._call([str(self.herdr), 'agent', 'prompt', owned[0], payload['user_prompt']]))
