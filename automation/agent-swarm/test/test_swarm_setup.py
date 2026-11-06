@@ -713,6 +713,36 @@ class SetupTests(unittest.TestCase):
         first = setup.canonical_digest(root); (root / "b").unlink(); (root / "c").write_text("same")
         self.assertNotEqual(first, setup.canonical_digest(root))
 
+    def test_canonical_digest_ignores_macos_metadata_but_not_real_content(self):
+        setup = self.make(); source = setup.home / "source"; remote = setup.home / "remote"
+        for root in (source, remote):
+            (root / "assets").mkdir(parents=True); (root / "SKILL.md").write_text("same"); (root / "assets/bootstrap.md").write_text("same")
+        (remote / "._SKILL.md").write_text("metadata"); (remote / ".DS_Store").write_text("metadata")
+        (remote / "assets/._bootstrap.md").write_text("metadata"); (remote / "assets/.DS_Store").write_text("metadata")
+        self.assertEqual(setup.canonical_digest(source), setup.canonical_digest(remote))
+        (remote / "SKILL.md").write_text("different")
+        self.assertNotEqual(setup.canonical_digest(source), setup.canonical_digest(remote))
+
+    def test_auto_update_status_json_only_skips_matching_loaded_schedule(self):
+        for status, expected, installs in (
+            ({"config": {"hour": 4, "minute": 30}, "loaded": True}, "ok", 0),
+            ({"config": {"hour": 5, "minute": 30}, "loaded": True}, "changed", 1),
+            ({"config": {"hour": 4, "minute": 30}, "loaded": False}, "changed", 1),
+        ):
+            with self.subTest(status=status):
+                setup = self.make(); calls = []; copied = []
+                def remote(command, *args):
+                    calls.append(command)
+                    if command.endswith("status --json"): return Result(0, json.dumps(status))
+                    if " install --hour " in command: return Result()
+                    return Result(1)
+                setup.remote_tool = remote
+                setup._remote_copy = lambda *args: copied.append(args)
+                self.assertEqual(setup.auto_update_phase()[0], expected)
+                self.assertEqual(len(copied), installs)
+                self.assertEqual(sum(" install --hour " in command for command in calls), installs)
+                self.assertIn("status --json", calls[0])
+
     def test_no_auto_update_skips_phase_nine(self):
         self.assertEqual(self.make(auto_update=False).auto_update_phase()[0], "skipped")
 

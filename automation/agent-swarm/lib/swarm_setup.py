@@ -587,7 +587,7 @@ if not m:
     @staticmethod
     def canonical_digest(root):
         digest = hashlib.sha256()
-        for item in sorted(p for p in root.rglob("*") if p.is_file()):
+        for item in sorted((p for p in root.rglob("*") if p.is_file() and not (p.name.startswith("._") or p.name == ".DS_Store")), key=lambda p: p.relative_to(root).as_posix()):
             digest.update(item.relative_to(root).as_posix().encode() + b"\0" + item.read_bytes() + b"\0")
         return digest.hexdigest()
 
@@ -595,7 +595,7 @@ if not m:
         repository = Path(__file__).resolve().parents[3]; source = repository / "skills/agent-swarm-remote"; source_hash = self.canonical_digest(source)
         remote_program = """import hashlib,json,pathlib,sys
 r=pathlib.Path(json.loads(sys.argv[1])); h=hashlib.sha256()
-for p in sorted((x for x in r.rglob('*') if x.is_file()),key=lambda x:x.relative_to(r).as_posix()): h.update(p.relative_to(r).as_posix().encode()+b'\\0'+p.read_bytes()+b'\\0')
+for p in sorted((x for x in r.rglob('*') if x.is_file() and not (x.name.startswith('._') or x.name=='.DS_Store')),key=lambda x:x.relative_to(r).as_posix()): h.update(p.relative_to(r).as_posix().encode()+b'\\0'+p.read_bytes()+b'\\0')
 print(h.hexdigest())
 """
         runtimes = [("pi", "/.pi/agent/skills/agent-swarm-remote", "/.pi/agent/AGENTS.md")]
@@ -605,7 +605,7 @@ print(h.hexdigest())
         if self.dry_run:
             inspect_program = """import hashlib,json,pathlib,re,sys
 r=pathlib.Path(json.loads(sys.argv[1])); a=pathlib.Path(json.loads(sys.argv[2])); b=json.loads(sys.argv[3]); h=hashlib.sha256()
-for p in sorted((x for x in r.rglob('*') if x.is_file()),key=lambda x:x.relative_to(r).as_posix()): h.update(p.relative_to(r).as_posix().encode()+b'\\0'+p.read_bytes()+b'\\0')
+for p in sorted((x for x in r.rglob('*') if x.is_file() and not (x.name.startswith('._') or x.name=='.DS_Store')),key=lambda x:x.relative_to(r).as_posix()): h.update(p.relative_to(r).as_posix().encode()+b'\\0'+p.read_bytes()+b'\\0')
 s=a.read_text() if a.exists() else ''; matches=re.findall(r'(?s)<!-- BEGIN AGENT-SWARM-REMOTE-BOOTSTRAP -->.*?<!-- END AGENT-SWARM-REMOTE-BOOTSTRAP -->',s)
 print(json.dumps({'digest':h.hexdigest(),'bootstrap':len(matches)==1 and matches[0].strip()==b.strip()}))
 """
@@ -629,7 +629,7 @@ print(json.dumps({'digest':h.hexdigest(),'bootstrap':len(matches)==1 and matches
                     backup = self.remote_home_path("/.local/state/agent-swarm/skill-backups/%s-agent-swarm-remote-%s" % (runtime, int(self.clock())))
                     if self.remote_tool("test ! -e %s || { mkdir -p %s && mv %s %s; }" % tuple(shlex.quote(x) for x in (destination, str(Path(backup).parent), destination, backup))).returncode: raise SetupError("Could not back up skill")
                     archive = self.home / (".local/state/agent-swarm/setup/skill-%s.tar" % runtime); archive.parent.mkdir(parents=True, exist_ok=True)
-                    if self.command(["tar", "-cf", str(archive), "-C", str(source.parent), source.name]).returncode: raise SetupError("Could not package skill")
+                    if self.command(["tar", "--exclude=._*", "--exclude=*/._*", "--exclude=.DS_Store", "--exclude=*/.DS_Store", "-cf", str(archive), "-C", str(source.parent), source.name]).returncode: raise SetupError("Could not package skill")
                     staged = "~/.local/state/agent-swarm/setup/" + archive.name; self._remote_copy(archive, staged, "600")
                     stage = self.remote_home_path("/.local/state/agent-swarm/setup")
                     if self.remote_tool("mkdir -p %s && tar -xf %s -C %s" % tuple(shlex.quote(x) for x in (str(Path(destination).parent), stage + "/" + archive.name, str(Path(destination).parent)))).returncode: raise SetupError("Could not install skill")
@@ -652,8 +652,11 @@ if n!=s:
 
     def auto_update_phase(self):
         if not self.auto_update: return self.result("skipped", "skipped by --no-auto-update")
-        hour, minute = self.update_time.split(":"); executable = self.remote_home_path("/.local/agent-swarm/bin/swarm-update"); status = self.remote_tool(shlex.quote(executable) + " status")
-        if status.returncode == 0 and ('"hour": %d' % int(hour)) in status.stdout and ('"minute": %d' % int(minute)) in status.stdout and '"loaded": true' in status.stdout.lower(): return self.result("ok", "daily update already configured")
+        hour, minute = self.update_time.split(":"); executable = self.remote_home_path("/.local/agent-swarm/bin/swarm-update"); status = self.remote_tool(shlex.quote(executable) + " status --json")
+        try: configured = json.loads(status.stdout) if status.returncode == 0 else {}
+        except (TypeError, ValueError): configured = {}
+        schedule = configured.get("config") if isinstance(configured, dict) else None
+        if isinstance(schedule, dict) and schedule.get("hour") == int(hour) and schedule.get("minute") == int(minute) and configured.get("loaded") is True: return self.result("ok", "daily update already configured")
         if self.dry_run: return self.result("changed", "would install daily update at " + self.update_time)
         self._remote_copy(Path(__file__).resolve().parents[3] / "automation/agent-swarm/bin/swarm-update", "~/.local/agent-swarm/bin/swarm-update")
         if self.remote_tool(shlex.quote(executable) + " install --hour %s --minute %s" % (hour, minute), 120).returncode: raise SetupError("Could not install auto-update")
