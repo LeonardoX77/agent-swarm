@@ -31,6 +31,8 @@ class Herdr:
         # Recorded live schema: no id/agent_id; agent_session carries the runtime too.
         self.agent = {'agent': 'pi', 'name': None, 'pane_id': 'pane-1', 'tab_id': 'tab-1', 'agent_status': 'idle', 'agent_session': {'agent': 'pi', 'kind': 'path', 'source': 'herdr:pi', 'value': str(session)}}
         self.fail = None
+        self.start_response = None
+        self.get_responses = []
         self.prompt_failure = None
         self.tab_get_error = None
         self.tab_get_response = None
@@ -46,9 +48,10 @@ class Herdr:
                 return stderr_response({'error': {'code': 'invalid_agent_name'}})
             self.agent['name'] = argv[3]
             self.agent['agent_session']['value'] = argv[-1]
-            return response({'result': {'agent': self.agent}})
+            return self.start_response or response({'result': {'agent': self.agent}})
         if command == ['agent', 'get']:
-            return response({'result': {'agent': self.agent}})
+            value = self.get_responses.pop(0) if self.get_responses else response({'result': {'agent': self.agent}})
+            return value() if callable(value) else value
         if command == ['agent', 'prompt']:
             if self.prompt_failure is not None:
                 return self.prompt_failure
@@ -134,6 +137,68 @@ class HerdrTaskTests(unittest.TestCase):
             self.assertIn('--session', herdr.calls[1])
             self.assertEqual(Path(herdr.calls[1][-1]).resolve(), session.resolve())
 
+    def test_submit_polls_delayed_start_identity_before_prompting_once(self):
+        directory, controller, herdr, session = self.make()
+        now = [0]
+        with directory:
+            herdr.agent['name'] = 'p' + TASK.replace('-', '')[:31]
+            incomplete = {**herdr.agent, 'agent_session': None}
+            herdr.start_response = response({'result': {'agent': incomplete}})
+            herdr.get_responses = [
+                response({'result': {'agent': incomplete}}),
+                response({'result': {'agent': incomplete}}),
+                lambda: response({'result': {'agent': herdr.agent}}),
+            ]
+            report = controller.submit(ENVELOPE, clock=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+            self.assertEqual(report['status'], 'submitted')
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'start']]), 1)
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'get']]), 3)
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'prompt']]), 1)
+            self.assertEqual(Path(herdr.agent['agent_session']['value']).resolve(), session.resolve())
+
+    def test_submit_polls_after_typed_start_error_before_prompting_once(self):
+        directory, controller, herdr, _ = self.make()
+        now = [0]
+        with directory:
+            herdr.agent['name'] = 'p' + TASK.replace('-', '')[:31]
+            herdr.start_response = stderr_response({'error': {'code': 'starting'}})
+            herdr.get_responses = [lambda: response({'result': {'agent': herdr.agent}})]
+            report = controller.submit(ENVELOPE, clock=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+            self.assertEqual(report['status'], 'submitted')
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'start']]), 1)
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'get']]), 1)
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'prompt']]), 1)
+
+    def test_submit_reports_unknown_when_start_identity_never_appears_by_deadline(self):
+        directory, controller, herdr, _ = self.make()
+        now = [0]
+        with directory:
+            controller.timeout = 1
+            incomplete = {**herdr.agent, 'agent_session': None}
+            herdr.start_response = response({'result': {'agent': incomplete}})
+            herdr.get_responses = [response({'result': {'agent': incomplete}})] * 3
+            report = controller.submit(ENVELOPE, clock=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+            self.assertEqual((report['status'], controller.ledger.load(TASK)['phase']), ('unknown', 'unknown'))
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'start']]), 1)
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'get']]), 2)
+            self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'prompt']]), 0)
+            self.assertEqual(now[0], 1)
+
+    def test_submit_rejects_wrong_identity_while_polling_startup(self):
+        for mismatch in ('name', 'pane_id', 'agent_session'):
+            directory, controller, herdr, _ = self.make()
+            now = [0]
+            with self.subTest(mismatch=mismatch), directory:
+                controller.timeout = 1
+                wrong = {**herdr.agent, 'name': 'foreign-agent'} if mismatch == 'name' else {**herdr.agent, mismatch: 'foreign-pane'}
+                if mismatch == 'agent_session':
+                    wrong['agent_session'] = {**herdr.agent['agent_session'], 'value': '/foreign/session.jsonl'}
+                herdr.start_response = response({'result': {'agent': wrong}})
+                herdr.get_responses = [response({'result': {'agent': wrong}})] * 3
+                report = controller.submit(ENVELOPE, clock=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+                self.assertEqual((report['status'], controller.ledger.load(TASK)['phase']), ('unknown', 'unknown'))
+                self.assertEqual(len([call for call in herdr.calls if call[1:3] == ['agent', 'prompt']]), 0)
+
     def test_prompt_argv_never_uses_timeout_without_wait_and_is_submitted(self):
         directory, controller, herdr, _ = self.make()
         with directory:
@@ -173,10 +238,13 @@ class HerdrTaskTests(unittest.TestCase):
     def test_ambiguous_effects_become_unknown_without_retry(self):
         for command in (['tab', 'create'], ['agent', 'start'], ['agent', 'prompt']):
             directory, controller, herdr, _ = self.make()
+            now = [0]
             with directory:
+                controller.timeout = 1
                 herdr.fail = command
-                self.assertEqual(controller.submit(ENVELOPE)['status'], 'unknown')
-                count = len(herdr.calls); self.assertEqual(controller.submit(ENVELOPE)['status'], 'unknown')
+                submit = lambda: controller.submit(ENVELOPE, clock=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+                self.assertEqual(submit()['status'], 'unknown')
+                count = len(herdr.calls); self.assertEqual(submit()['status'], 'unknown')
                 self.assertEqual(len(herdr.calls), count)
 
     def test_recover_is_readonly_and_requires_owned_identity_and_session_chain(self):

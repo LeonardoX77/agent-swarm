@@ -38,7 +38,7 @@ Evidencia comunicada por el responsable de la ejecución real (no repetida por l
 | Área | Observación histórica | Límite |
 | --- | --- | --- |
 | Sesión propia | Una tab y un agente Pi propios pudieron responder un nonce y limpiarse sin cerrar recursos preexistentes. | No demuestra aislamiento completo ni garantía de producción. |
-| Arranque de Pi | En una aceptación real, Herdr devolvió un agente idle justo después de `agent start`; el adaptador dejó el ledger en `start_intent` y la aceptación quedó `unknown`. Repetir el mismo setup pasó. | Evidencia de una posible carrera de arranque, no causa confirmada ni corregida. Añadir una prueba determinista con un agente que tarde en estar listo y comprobar que la aceptación no se declara fallida ni se reenvía el prompt a ciegas. |
+| Arranque de Pi | **Reproducido en el nodo WSL real:** a las `21:53:53.068` `tab.create` generó el pane 3; `agent.start` devolvió error a `.080`, devolvió `ok` a `.183`, y Pi sólo se registró a `.622`. El ledger quedó `unknown` en `start_intent` y no se envió ningún prompt. El adaptador ahora consulta `herdr agent get <pane_id>` aproximadamente cada 0,5 segundos, con un límite de espera para el arranque, antes de declarar `unknown`; registra `started` y envía el prompt sólo después de confirmar la identidad estricta de propiedad. | Esto protege frente a la carrera de registro observada sin reintentar `agent start` ni reenviar un prompt a ciegas. Validar el comportamiento acotado frente a futuras versiones de runtime de Herdr/Pi. |
 | Resultado JSONL | El adaptador encontró el mensaje exacto de usuario y una respuesta final descendiente en el JSONL de la sesión propia. | Los snapshots de pantalla no correlacionan por sí mismos un turno. |
 | Ledger | Persistir intención antes de crear, iniciar, enviar y cerrar permitió conservar estados ambiguos para recuperación. | No aporta exactly-once distribuido ni autoriza reenvío automático. |
 | Envelope | El contrato correcto contiene seis campos y `mode: executor`; entradas extra o modos no admitidos se rechazan. | La validación no sustituye el control humano del alcance. |
@@ -57,7 +57,7 @@ También se observó que Herdr puede emitir errores tipados por stdout o stderr,
 2. Verificar en cada despliegue el catálogo SMB limitado, aliases, huellas y ambas direcciones SSH.
 3. Mantener login y credenciales de Pi locales al host; una observación de GUI no demuestra autenticación no interactiva distinta.
 4. Coordinar escritores humanos: el canal no implementa locks ni resolución de conflictos.
-5. Reproducir y cubrir la posible carrera entre `herdr agent start` y la disponibilidad efectiva de Pi antes de modificar el adaptador; la prueba debe distinguir agente idle sin turno recibido de respuesta final válida y evitar reenvíos ciegos.
+5. Volver a validar la carrera reproducida entre el registro de Pi y `herdr agent start` al desplegar un runtime nuevo de Herdr o Pi; el adaptador ahora espera identidad estricta mediante sondeo acotado de `agent get`, nunca reintenta `agent start` y nunca envía un prompt antes de confirmar la propiedad.
 6. Evaluar cualquier cambio de runtime o protocolo como trabajo nuevo, con evidencia nueva.
 
 ## Evidencia local disponible
