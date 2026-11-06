@@ -266,11 +266,21 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         address = address or self.candidates(remote)[0]
         return ["ssh-keyscan", *self.port_args(port), "-t", "ed25519", address]
 
+    @staticmethod
+    def keyscan_record(output):
+        """Return the host, type, and key from an ed25519 keyscan record."""
+        for line in output.splitlines():
+            fields = line.split()
+            if line.strip() and not line.lstrip().startswith("#") and len(fields) >= 3 and fields[1] == "ssh-ed25519":
+                return fields[:3]
+        raise SetupError("Could not find an ssh-ed25519 SSH host key in keyscan output")
+
     def fingerprint(self, scan=False, remote=False):
         if scan:
             result = self.remote(" ".join(shlex.quote(x) for x in self.keyscan_args(remote=True))) if remote else self.command(self.keyscan_args())
             if result.returncode: raise SetupError("Could not scan SSH host key")
-            result = self.remote("printf %s | ssh-keygen -lf -" % shlex.quote(result.stdout)) if remote else self.command(["ssh-keygen", "-lf", "-"], input=result.stdout)
+            record = " ".join(self.keyscan_record(result.stdout))
+            result = self.remote("printf %s | ssh-keygen -lf -" % shlex.quote(record)) if remote else self.command(["ssh-keygen", "-lf", "-"], input=record)
         else: result = self.command(["ssh-keygen", "-lf", "/etc/ssh/ssh_host_ed25519_key.pub"])
         match = re.search(r"(SHA256:[A-Za-z0-9+/=]+)", result.stdout or "")
         if result.returncode or not match: raise SetupError("SSH fingerprint was not available")
@@ -309,13 +319,14 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         scans, failures = [], []
         for candidate in self.candidates(remote):
             result = self.remote(" ".join(shlex.quote(x) for x in self.keyscan_args(remote=True, address=candidate))) if remote else self.command(self.keyscan_args(address=candidate))
-            lines = [line for line in result.stdout.splitlines() if line]
-            if result.returncode or not lines:
+            if result.returncode:
                 failures.append(candidate); continue
-            fingerprint = self.remote("printf %s | ssh-keygen -lf -" % shlex.quote(result.stdout)).stdout if remote else self.command(["ssh-keygen", "-lf", "-"], input=result.stdout).stdout
+            record = self.keyscan_record(result.stdout)
+            scanned = " ".join(record)
+            fingerprint = self.remote("printf %s | ssh-keygen -lf -" % shlex.quote(scanned)).stdout if remote else self.command(["ssh-keygen", "-lf", "-"], input=scanned).stdout
             match = re.search(r"(SHA256:[A-Za-z0-9+/=]+)", fingerprint or "")
             if not match: raise SetupError("Could not scan SSH host key")
-            scans.append((candidate, lines, match.group(1)))
+            scans.append((candidate, record, match.group(1)))
         if not scans: raise SetupError("Could not scan SSH host key")
         return scans, failures
 
@@ -348,12 +359,12 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
             scan = self.command(self.keyscan_args()); lines = [line for line in scan.stdout.splitlines() if line]
             if scan.returncode or not lines: raise SetupError("Could not scan SSH host key")
         else:
-            key_fields = scans[0][1][0].split(maxsplit=2)
-            lines = ["swarm-%s %s %s" % (self.name, key_fields[1], key_fields[2])]
+            _, key_type, key_data = scans[0][1]
+            lines = ["swarm-%s %s %s" % (self.name, key_type, key_data)]
         prior = known.read_text(encoding="utf-8") if known.exists() else ""
         if len(candidates) > 1:
             alias = "swarm-" + self.name
-            stale = [line for line in prior.splitlines() if line.split(maxsplit=1) and line.split(maxsplit=1)[0] == alias and line not in lines]
+            stale = [line for line in prior.splitlines() if line.strip() and not line.lstrip().startswith("#") and line.split(maxsplit=1)[0] == alias and line not in lines]
             if stale:
                 raise SetupError("SSH known_hosts entry for %s differs; verify and remove the stale entry before re-running" % alias)
         missing_lines = [line for line in lines if line not in prior.splitlines()]
@@ -365,7 +376,9 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
         try: line = RESTRICTIONS + public.read_text(encoding="utf-8").strip()
         except OSError: raise SetupError("Could not read SSH public key")
         authorization = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && { touch ~/.ssh/authorized_keys && grep -qxF %s ~/.ssh/authorized_keys || printf '%%s\\n' %s >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys" % (shlex.quote(line), shlex.quote(line))
-        self.wait_for("On %s run this exact command, then continue:\n%s" % (self.name, authorization), lambda: self.command(["ssh", *self.port_args(self.ssh_port), "-i", str(key), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", self.user + "@" + ((self.first_reachable(candidates, self.ssh_port) or candidates[0]) if len(candidates) > 1 else candidates[0]), "true"]).returncode == 0)
+        probe_options = ["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"]
+        if len(candidates) > 1: probe_options += ["-o", "HostKeyAlias=swarm-" + self.name]
+        self.wait_for("On %s run this exact command, then continue:\n%s" % (self.name, authorization), lambda: self.command(["ssh", *self.port_args(self.ssh_port), "-i", str(key), *probe_options, self.user + "@" + ((self.first_reachable(candidates, self.ssh_port) or candidates[0]) if len(candidates) > 1 else candidates[0]), "true"]).returncode == 0)
         if len(candidates) > 1: changed = self.install_local_helper() or changed
         changed = self.write_alias(self.home / ".ssh/config", "swarm-" + self.name, self.address, self.user, str(key), self.ssh_port, candidates=candidates, helper=helper) or changed
         return self.result("changed" if changed else "ok", "configured SSH channel" if changed else "SSH alias already configured")
@@ -443,10 +456,10 @@ if m and m.group(0).strip()!=block.strip(): raise SystemExit(9)
             scans, failures = self.candidate_scans(remote=True); observed = scans[0][2]
             if any(scan[2] != observed for scan in scans) or self.fingerprint() != observed: raise SetupError("Origin SSH host fingerprint mismatch")
             for candidate in failures: self.emit("SSH candidate unreachable: " + candidate)
-            fields = scans[0][1][0].split(maxsplit=2); origin_lines = ["swarm-%s %s %s" % (self.origin["name"], fields[1], fields[2])]
+            _, key_type, key_data = scans[0][1]; origin_lines = ["swarm-%s %s %s" % (self.origin["name"], key_type, key_data)]
         known_program = """import json,pathlib,sys
 p=pathlib.Path(json.loads(sys.argv[1])); lines=json.loads(sys.argv[2]); alias=json.loads(sys.argv[3]); s=p.read_text() if p.exists() else ''; existing=s.splitlines()
-stale=[line for line in existing if alias and line.split(maxsplit=1) and line.split(maxsplit=1)[0]==alias and line not in lines]
+stale=[line for line in existing if alias and line.strip() and not line.lstrip().startswith('#') and line.split(maxsplit=1)[0]==alias and line not in lines]
 if stale: raise SystemExit(10)
 missing=[line for line in lines if line not in existing]
 if missing:

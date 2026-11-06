@@ -76,7 +76,8 @@ class SetupTests(unittest.TestCase):
                     key = setup.home / ".ssh/agent_swarm_new_mac"
                     key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("pub")
                     calls = []; polls = []
-                    scan = ("New.local" if port == 22 else "[New.local]:%s" % port) + " ssh-ed25519 KEY\n"
+                    record = ("New.local" if port == 22 else "[New.local]:%s" % port) + " ssh-ed25519 KEY\n"
+                    scan = "# New.local:%s SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20\n" % port + record
                     def runner(argv, **kwargs):
                         calls.append(argv)
                         if argv[0] == "ssh-keyscan": return Result(out=scan)
@@ -109,6 +110,12 @@ class SetupTests(unittest.TestCase):
                     "  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ForwardAgent no\n")
         self.assertEqual(Setup.alias_block("swarm-peer", "peer.local", "leo", key, 2222, ["peer.local"]), expected)
         self.assertEqual(Setup.alias_block("swarm-peer", "peer.local", "leo", key, 2222, ["peer.local"]), expected)
+
+    def test_keyscan_record_ignores_comments_and_fails_closed_without_ed25519_key(self):
+        self.assertEqual(Setup.keyscan_record("\n# peer:2222 SSH-2.0-OpenSSH\n[peer]:2222 ssh-ed25519 KEY\n"),
+                         ["[peer]:2222", "ssh-ed25519", "KEY"])
+        with self.assertRaisesRegex(SetupError, "Could not find an ssh-ed25519 SSH host key"):
+            Setup.keyscan_record("# peer SSH-2.0-OpenSSH\npeer ecdsa-sha2-nistp256 KEY\n")
 
     def test_multi_candidate_alias_uses_host_key_alias_and_proxy_command(self):
         block = Setup.alias_block("swarm-peer", "tailnet", "leo", "/tmp/key", 2222,
@@ -560,7 +567,11 @@ class SetupTests(unittest.TestCase):
 
     def test_non_tty_fingerprint_requires_option_and_prints_hint(self):
         setup = self.make()
-        setup.command = lambda argv, **kw: Result(1 if argv[:1] == ["ssh"] else 0, "256 SHA256:ok host")
+        def command(argv, **kwargs):
+            if argv[:1] == ["ssh"]: return Result(1)
+            if argv[:1] == ["ssh-keyscan"]: return Result(out="New.local ssh-ed25519 keyline\n")
+            return Result(out="256 SHA256:ok host")
+        setup.command = command
         with self.assertRaisesRegex(Waiting, "--host-fingerprint SHA256:ok"): setup.ssh_to_new()
 
     def test_multi_candidate_stale_alias_known_host_fails_closed_without_writes(self):
@@ -621,12 +632,14 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(setup.state_path.exists())
 
     def test_multi_candidate_skips_unreachable_candidate_but_writes_one_alias_key(self):
-        setup = self.make(host_fingerprint="SHA256:ok", fallback_addresses=["lan.local"])
+        setup = self.make(host_fingerprint="SHA256:ok", fallback_addresses=["lan.local"], ssh_port=2222)
         key = setup.home / ".ssh/agent_swarm_new_mac"; key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("pub")
+        calls = []
         def runner(argv, **kwargs):
+            calls.append(argv)
             if argv[:1] == ["ssh"]: return Result(0 if "leo@New.local" in " ".join(argv) else 1)
             if argv[:1] == ["ssh-keyscan"]:
-                return Result(1) if argv[-1] == "lan.local" else Result(out="New.local ssh-ed25519 KEY\n")
+                return Result(1) if argv[-1] == "lan.local" else Result(out="# New.local:2222 SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20\n[New.local]:2222 ssh-ed25519 KEY\n")
             if argv[:2] == ["ssh-keygen", "-lf"]: return Result(out="256 SHA256:ok host\n")
             return Result()
         setup.runner = runner
@@ -635,26 +648,39 @@ class SetupTests(unittest.TestCase):
         self.assertIn("SSH candidate unreachable: lan.local\n", setup.output.getvalue())
         config = (setup.home / ".ssh/config").read_text()
         self.assertIn("HostKeyAlias swarm-new-mac", config)
-        self.assertIn("--port 22 -- New.local lan.local", config)
+        self.assertIn("--port 2222 -- New.local lan.local", config)
         self.assertEqual((setup.home / ".ssh/known_hosts").read_text(), "swarm-new-mac ssh-ed25519 KEY\n")
+        self.assertIn(["ssh", "-p", "2222", "-i", str(key), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "HostKeyAlias=swarm-new-mac", "leo@New.local", "true"], calls)
 
     def test_fingerprint_mismatch_stops_hard(self):
         setup = self.make(host_fingerprint="SHA256:not-it")
-        setup.command = lambda argv, **kw: Result(1 if argv[:1] == ["ssh"] else 0, "256 SHA256:ok host")
+        def command(argv, **kwargs):
+            if argv[:1] == ["ssh"]: return Result(1)
+            if argv[:1] == ["ssh-keyscan"]: return Result(out="New.local ssh-ed25519 keyline\n")
+            return Result(out="256 SHA256:ok host")
+        setup.command = command
         with self.assertRaisesRegex(SetupError, "mismatch"): setup.ssh_to_new()
 
     def test_fingerprint_option_continues_to_authorization_wait(self):
         setup = self.make(host_fingerprint="SHA256:ok")
         key = setup.home / ".ssh/agent_swarm_new_mac"; key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("ssh-ed25519 public")
-        setup.command = lambda argv, **kw: Result(1 if argv[:1] == ["ssh"] else 0, "256 SHA256:ok host")
+        def command(argv, **kwargs):
+            if argv[:1] == ["ssh"]: return Result(1)
+            if argv[:1] == ["ssh-keyscan"]: return Result(out="New.local ssh-ed25519 keyline\n")
+            return Result(out="256 SHA256:ok host")
+        setup.command = command
         with self.assertRaises(Waiting): setup.ssh_to_new()
 
     def test_known_hosts_uses_real_newline_once(self):
         setup = self.make(host_fingerprint="SHA256:ok", no_wait=True)
         key = setup.home / ".ssh/agent_swarm_new_mac"; key.parent.mkdir(); key.write_text("key"); key.with_suffix(".pub").write_text("pub")
-        setup.command = lambda argv, **kw: Result(1 if argv[:1] == ["ssh"] or "@New.local" in " ".join(argv) else 0, "256 SHA256:ok host" if "ssh-keygen" in argv else "keyline")
+        def command(argv, **kwargs):
+            if argv[:1] == ["ssh"] or "@New.local" in " ".join(argv): return Result(1)
+            if argv[:1] == ["ssh-keygen"]: return Result(out="256 SHA256:ok host")
+            return Result(out="New.local ssh-ed25519 keyline")
+        setup.command = command
         with self.assertRaises(Waiting): setup.ssh_to_new()
-        self.assertEqual((setup.home / ".ssh/known_hosts").read_bytes(), b"keyline\n")
+        self.assertEqual((setup.home / ".ssh/known_hosts").read_bytes(), b"New.local ssh-ed25519 keyline\n")
 
     def test_remote_copy_expands_home_before_scp(self):
         setup = self.make(); source = setup.home / "source"; source.write_text("x")
