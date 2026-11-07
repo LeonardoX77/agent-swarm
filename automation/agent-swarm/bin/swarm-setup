@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Set up a registered Agent Swarm host (macOS or Linux/WSL) in one resumable process.
 
-Linux/WSL uses a human-configured, user-mountable CIFS fstab entry and user systemd
-services for persistent mounts and daily updates. Credentials are created by the human.
+Shared-catalog spokes use a human-configured, user-mountable CIFS fstab entry on
+Linux/WSL and user systemd services for persistent mounts and daily updates. Credentials
+are created by the human. A local-only spoke instead requires an already-provisioned
+remote catalog root and Agent Swarm checkout, and never mounts SMB.
 """
 import argparse
 import sys
@@ -23,6 +25,8 @@ def parser():
     add.add_argument('--fallback-address', action='append', default=[], metavar='ADDR', help='fallback SSH address, tried after --address (repeatable)')
     add.add_argument('--origin-address', action='append', default=[], metavar='ADDR', help='origin SSH address for the reverse alias (repeatable; overrides registry candidates)')
     add.add_argument('--share-host', action='append', default=[], metavar='HOST', help='SMB host for a spoke, in preference order (repeatable)')
+    add.add_argument('--local-catalog-root', metavar='ROOT', help='absolute remote catalog root for a local-only spoke; requires --local-repo and skips SMB mounting')
+    add.add_argument('--local-repo', metavar='REPO', help='absolute pre-provisioned Agent Swarm repository inside --local-catalog-root for a local-only spoke')
     add.add_argument('--role', choices=('hub', 'spoke'), default='spoke'); add.add_argument('--host-fingerprint'); add.add_argument('--origin-user')
     add.add_argument('--ssh-port', default='22', metavar='PORT', help='target sshd port (1-65535; default: 22)')
     add.add_argument('--origin-ssh-port', default=None, metavar='PORT', help='origin sshd port reached by the target (1-65535; default: 22)')
@@ -44,7 +48,9 @@ def main(argv=None):
             or any(not valid_address(value) for value in [args.address, *args.fallback_address, *args.origin_address, *args.share_host])
             or len(args.fallback_address) != len(set(args.fallback_address)) or args.address in args.fallback_address
             or len(args.origin_address) != len(set(args.origin_address)) or len(args.share_host) != len(set(args.share_host))
-            or (args.role == 'hub' and args.share_host)):
+            or (args.role == 'hub' and args.share_host)
+            or ((args.local_catalog_root is None) != (args.local_repo is None))
+            or (args.local_catalog_root is not None and (args.role != 'spoke' or args.share_host))):
         print('INVALID_INPUT', file=sys.stderr); return 2
     try:
         ports = [args.ssh_port] + ([] if args.origin_ssh_port is None else [args.origin_ssh_port])
@@ -54,9 +60,14 @@ def main(argv=None):
         if args.origin_ssh_port is not None: args.origin_ssh_port = int(args.origin_ssh_port)
     except ValueError:
         print('INVALID_INPUT', file=sys.stderr); return 2
+    if args.local_catalog_root is not None:
+        try: args.local_catalog_root, args.local_repo = Setup.local_catalog_paths(args.local_catalog_root, args.local_repo)
+        except Exception:
+            print('INVALID_INPUT', file=sys.stderr); return 2
     setup = Setup(args.name, args.address, args.user, role=args.role, host_fingerprint=args.host_fingerprint,
                   ssh_port=args.ssh_port, origin_ssh_port=args.origin_ssh_port,
                   fallback_addresses=args.fallback_address, origin_addresses=args.origin_address, share_hosts=args.share_host,
+                  local_catalog_root=args.local_catalog_root, local_repo=args.local_repo,
                   origin_user=args.origin_user, auto_update=args.auto_update, update_time=args.update_time, install_missing=args.install_missing,
                   skip_live=args.skip_live, dry_run=args.dry_run, no_wait=args.no_wait,
                   wait_timeout=args.wait_timeout, verbose=args.verbose, registry_path=args.registry)

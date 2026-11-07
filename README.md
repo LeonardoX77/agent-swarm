@@ -2,7 +2,7 @@
 
 # 🐝 Agent Swarm
 
-**Connect two or more AI agents running on different machines across your local network or VPN.**
+**Connect two or more AI agents running on different machines across your local network or VPN, with either a shared SMB catalog or a local-only checkout.**
 
 Delegate tasks to whichever machine is free, put the compute you already own to work,
 and let each agent use its own tools without ever sharing credentials.
@@ -34,7 +34,7 @@ flowchart LR
         N1["⚙️ Node A<br/>Pi session"]
         N2["⚙️ Node B<br/>Pi session"]
         N3["⚙️ Node C<br/>Pi session"]
-        C[("📁 Project catalog<br/>shared over SMB")]
+        C[("📁 Shared catalog<br/>(default SMB mode)")]
     end
     O -- "task 1" --> N1
     O -- "task 2" --> N2
@@ -59,7 +59,7 @@ flowchart LR
 
 ## 🖥️ Platforms
 
-The protocol only needs standard Unix tools: SSH, Python 3, an SMB share, and Herdr with Pi. It is therefore designed for any Unix-like system.
+The protocol needs standard Unix tools, SSH, Python 3, and Herdr with Pi. Shared-catalog spokes additionally use an SMB share; local-only spokes do not. It is therefore designed for any Unix-like system.
 
 | Component | macOS | Linux / WSL |
 | --- | --- | --- |
@@ -97,7 +97,7 @@ flowchart TB
 | `swarm-update` | Checks for and installs updates for Herdr, mosh, moshi-hook, gentle-ai, Pi and Pi extensions, without `sudo`. |
 | `skills/agent-swarm-remote` | Teaches Pi and Claude to delegate or receive an envelope without leaving the contract. |
 
-Each node has one of two roles: the **hub** publishes the project catalog over SMB, and **spokes** mount it to work on the same projects.
+The **shared** mode (the default) has a hub publish its catalog over SMB and spokes mount it to work on the same projects. A **local-only** spoke has its own pre-provisioned catalog and Agent Swarm checkout instead: it does not install, copy, or mount SMB. This reduces exposure to a shared project catalog, at the cost that it can receive work only for projects present in its own catalog.
 
 ## 🚀 Getting started
 
@@ -119,6 +119,17 @@ automation/agent-swarm/bin/swarm-setup add-host \
   --name spoke-node --address spoke-node.local --user your-user \
   --install-missing --no-auto-update
 ```
+
+This is shared mode, the default. For a local-only spoke, first provision its remote catalog and executable Agent Swarm checkout, then pass absolute contained paths instead of SMB options:
+
+```sh
+automation/agent-swarm/bin/swarm-setup add-host \
+  --name isolated-node --address isolated-node.local --user your-user \
+  --local-catalog-root /srv/catalog \
+  --local-repo /srv/catalog/agent-swarm
+```
+
+`--local-catalog-root` and `--local-repo` are required together, only apply to a spoke, and the repo must be inside the catalog root. `--share-host` cannot be combined with them. See `swarm-setup add-host --help` for these and the remaining setup options.
 
 Drop `--no-auto-update` to enable daily updates (04:30 by default) on either platform. A node set up before that phase existed has no updater: run `automation/agent-swarm/bin/swarm-update install` on it. Herdr is upgraded but its server is never restarted; the run only reports `server restart pending` in `swarm-update` output and its log, so restart it yourself when convenient. If the command stops waiting for an action, do it and **run the same command again**: it continues from the pending phase. Where SSH/Tailscale needs resilience, `--address` can be followed by ordered repeatable `--fallback-address` candidates (typically MagicDNS first, LAN second); SSH tries them in order.
 
@@ -154,7 +165,7 @@ automation/agent-swarm/bin/swarm-delegate preflight spoke-node
 # {"status": "ready", "target": "spoke-node"}
 ```
 
-If a spoke answers `catalog_missing`, mount the catalog before sending it work. The [validation guide](docs/runbooks/agent-swarm/validation.md) lists every check.
+If a shared-mode spoke answers `catalog_missing`, mount the catalog before sending it work. For a local-only spoke, provision the configured local catalog and checkout; SMB is not a remedy. Add `--project <catalog-relative-project>` to verify that the target actually has the intended project: `project_unavailable` means it does not. The [validation guide](docs/runbooks/agent-swarm/validation.md) lists every check.
 
 ## 📦 Send your first task
 
@@ -228,7 +239,7 @@ If you get `unknown`, query again with `recover` and the same UUID. If nothing c
 ## 🔐 Security
 
 - **SSH:** one `swarm-<node>` alias and one dedicated key per direction, with `StrictHostKeyChecking` on and no agent or port forwarding.
-- **SMB:** only the approved catalog is shared. macOS uses the mounting node's Keychain; Linux/WSL uses human-owned fstab access and a protected credentials file, never passwords passed to the tool.
+- **Catalog mode:** shared mode exposes only the approved SMB catalog (macOS uses Keychain; Linux/WSL uses human-owned fstab access and a protected credentials file). A local-only spoke avoids that SMB exposure, but its catalog and checkout must be provisioned and maintained separately; it cannot claim a project that is absent locally.
 - **Agents:** Pi and Herdr sessions and credentials never leave the node that runs them.
 - **Cleanup:** each node only closes the tabs and sessions it created itself.
 - **Concurrent writes:** not coordinated automatically. If two tasks touch the same project, review is human.

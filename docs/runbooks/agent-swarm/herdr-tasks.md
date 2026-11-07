@@ -19,13 +19,13 @@ Ledger phases are `reserved`, `create_intent`, `created`, `start_intent`, `start
 ```sh
 automation/agent-swarm/bin/swarm-delegate list
 automation/agent-swarm/bin/swarm-delegate self
-automation/agent-swarm/bin/swarm-delegate preflight <target>
+automation/agent-swarm/bin/swarm-delegate preflight <target> [--project CATALOG_RELATIVE_PATH]
 automation/agent-swarm/bin/swarm-delegate submit <target> < envelope.json
 automation/agent-swarm/bin/swarm-delegate recover <target> <UUID> [--wait SECONDS]
 automation/agent-swarm/bin/swarm-delegate close <target> <UUID>
 ```
 
-`<target>` must be a `list` name. `preflight` checks only SSH and catalog; if a spoke reports `catalog_missing`, mount its share using [SMB mount](smb-mount.md) before submitting work. The remote response is retained unchanged.
+`<target>` must be a `list` name. `preflight --project` also verifies the requested relative project under that target's catalog. `project_unavailable` means it is absent (including a symlink escape), so do not submit. A shared-mode spoke reporting `catalog_missing` needs [SMB mount](smb-mount.md); a local-mode spoke instead needs its pre-provisioned local catalog and checkout. The remote response is retained unchanged.
 
 SSH exit 255 makes the state unknown from the origin. Recover later or repeat `submit` with the **same** envelope; never create another UUID for the same work. If a Mac is off, do not use the channel; use local alternatives.
 

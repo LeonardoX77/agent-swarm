@@ -111,26 +111,28 @@ Debe devolver el nombre del destino sin solicitar contraseña ni confirmar una h
 
 ## Opcional: atajo interactivo para zsh
 
-Después de configurar y verificar el alias SSH, puede añadir un atajo en `~/.zshrc` del origen. Este ejemplo usa el destino registrado `wsl-leo`; adáptelo a su host. Si `aiconnect` ya existe, agregue un caso correspondiente a esa función en lugar de redefinirla.
+`aiconnect` es una función opcional para abrir una terminal SSH interactiva en un host registrado; Agent Swarm no la necesita para delegar tareas. Añádala a `~/.zshrc` del origen **después** de configurar y verificar los alias SSH. Use un nombre de `swarm-delegate list`: la función elige el alias correspondiente, no una dirección directa.
 
 ```zsh
 aiconnect() {
   if (( $# != 1 )); then
-    printf 'Usage: aiconnect <target>\n' >&2
+    printf 'Usage: aiconnect <registered-host>\n' >&2
     return 2
   fi
-  case "$1" in
-    wsl-leo) command ssh swarm-wsl-leo ;;
-    *) printf 'Unknown host: %s\n' "$1" >&2; return 2 ;;
-  esac
+  local target=$1
+  if [[ ! $target =~ '^[a-z0-9-]+$' ]]; then
+    printf 'Invalid Agent Swarm target: %s\n' "$target" >&2
+    return 2
+  fi
+  command ssh "swarm-$target"
 }
 ```
 
-Ejecute `source ~/.zshrc` o abra una terminal nueva. Conéctese con `aiconnect wsl-leo` si ese es el destino configurado. El atajo usa el alias SSH existente y no configura ni omite sus comprobaciones de seguridad.
+Si ya existe una función `aiconnect`, adapte sus rutas en lugar de redefinirla. Ejecute `source ~/.zshrc` o abra una terminal nueva y use `aiconnect <registered-host>`. La función sólo valida la sintaxis del nombre: confirme el registro con `swarm-delegate list` antes de usarla. Este ejemplo supone alias `swarm-<target>` generados por setup; para alias personalizados, utilice el `ssh_alias` del registro. Delega la verificación de huella y las opciones de conexión al alias SSH existente; una conexión SSH por sí sola no demuestra que un proyecto concreto esté disponible en ese host.
 
 ## Uso con Agent Swarm
 
-Una vez que ambas direcciones responden, confirme el registro y el catálogo con `swarm-delegate preflight <target>`. Si el destino es un spoke y informa `catalog_missing`, configure su montaje SMB antes de enviar tareas. Consulte [Agregar un equipo al canal Agent Swarm](../../setup/add-host.md) para el proceso completo y [Montaje SMB entre equipos](smb-mount.md) para el montaje persistente.
+Una vez que ambas direcciones responden, confirme el registro y el catálogo con `swarm-delegate preflight <target>`. Si un spoke con catálogo compartido informa `catalog_missing`, configure su montaje SMB; uno sólo local necesita en cambio su catálogo y checkout preaprovisionados. Para una tarea concreta, compruebe `swarm-delegate preflight <target> --project <proyecto-relativo-al-catálogo>` antes de enviarla; `project_unavailable` indica que el proyecto no está en el destino. Consulte [Agregar un equipo al canal Agent Swarm](../../setup/add-host.md) para el proceso completo y [Montaje SMB entre equipos](smb-mount.md) para el montaje persistente.
 
 ## Reversión por dirección
 
@@ -138,4 +140,4 @@ Una vez que ambas direcciones responden, confirme el registro y el catálogo con
 
 ## Comprobación final
 
-En cada dirección, compruebe que `ssh swarm-<target> hostname` funciona sin contraseña y que el alias coincide con el host definido en `config/hosts.json`. Desde un host registrado, `swarm-delegate preflight <target>` debe devolver `"status": "ready"` después de montar el catálogo en un `spoke`. Una conexión SSH exitosa por sí sola no demuestra que Pi, Herdr y la aceptación bidireccional funcionen: complete las fases de `swarm-setup` y consulte su estado.
+En cada dirección, compruebe que `ssh swarm-<target> hostname` funciona sin contraseña y que el alias coincide con el host definido en `config/hosts.json`. Desde un host registrado, `swarm-delegate preflight <target> --project <proyecto-relativo-al-catálogo>` debe devolver `"status": "ready"` para el proyecto solicitado; los spokes con catálogo compartido necesitan SMB y los sólo locales necesitan un checkout y un proyecto locales. Una conexión SSH exitosa por sí sola no demuestra que Pi, Herdr y la aceptación bidireccional funcionen: complete las fases de `swarm-setup` y consulte su estado.

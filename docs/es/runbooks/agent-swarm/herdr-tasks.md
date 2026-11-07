@@ -19,13 +19,13 @@ La fuente de verdad es `config/hosts.json`. Define alias SSH, catálogo, checkou
 ```sh
 automation/agent-swarm/bin/swarm-delegate list
 automation/agent-swarm/bin/swarm-delegate self
-automation/agent-swarm/bin/swarm-delegate preflight <destino>
+automation/agent-swarm/bin/swarm-delegate preflight <destino> [--project RUTA_RELATIVA_AL_CATÁLOGO]
 automation/agent-swarm/bin/swarm-delegate submit <destino> < envelope.json
 automation/agent-swarm/bin/swarm-delegate recover <destino> <UUID> [--wait SEGUNDOS]
 automation/agent-swarm/bin/swarm-delegate close <destino> <UUID>
 ```
 
-`<destino>` debe ser un nombre de `list`. `preflight` sólo comprueba SSH y el catálogo; si un spoke informa `catalog_missing`, monte el share siguiendo [Montaje SMB](smb-mount.md) antes de enviar la tarea. La respuesta remota se conserva sin cambios.
+`<destino>` debe ser un nombre de `list`. `preflight --project` también comprueba el proyecto relativo solicitado bajo el catálogo de ese destino. `project_unavailable` significa que falta (incluida una salida por symlink), así que no envíe la tarea. Un spoke compartido con `catalog_missing` necesita [Montaje SMB](smb-mount.md); uno local necesita su catálogo y checkout locales ya aprovisionados. La respuesta remota se conserva sin cambios.
 
 Una salida SSH 255 deja el estado desconocido desde el origen. Recupere más tarde o repita `submit` con el **mismo** sobre; nunca cree otro UUID para el mismo trabajo. Si un Mac está apagado, el canal no se usa y se emplean alternativas locales.
 

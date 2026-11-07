@@ -1,6 +1,6 @@
 # Montaje SMB entre equipos
 
-`swarm-smb-mount` consulta, monta y desmonta **un recurso SMB concreto** en macOS y Linux/WSL. macOS usa Keychain; Linux usa CIFS con una entrada fstab montable por el usuario. La herramienta no admite, guarda ni muestra contraseñas, y nunca usa sudo. Durante el alta, `swarm-setup` toma `share.host`, `share.name` y `share.user` de `config/hosts.json`; no copie valores de otro equipo.
+`swarm-smb-mount` consulta, monta y desmonta **un recurso SMB concreto** en macOS y Linux/WSL. Sólo sirve para el modo de catálogo compartido predeterminado; un spoke sólo local no debe instalarlo, copiarlo ni montarlo. macOS usa Keychain; Linux usa CIFS con una entrada fstab montable por el usuario. La herramienta no admite, guarda ni muestra contraseñas, y nunca usa sudo. Durante el alta, `swarm-setup` toma `share.host`, `share.name` y `share.user` de `config/hosts.json`; no copie valores de otro equipo.
 
 ## Preparación inicial (macOS)
 
@@ -45,7 +45,7 @@ La salida es JSON. `mount` es idempotente: informa el punto ya montado. macOS id
 
 ## Montaje persistente
 
-`swarm-setup` instala el montaje persistente durante el alta de un `spoke`. Para instalarlo manualmente, añada `--persistent` al primer montaje:
+`swarm-setup` instala el montaje persistente sólo durante el alta de un `spoke` en modo compartido. El alta sólo local omite por completo la fase de montaje. Para instalarlo manualmente, añada `--persistent` al primer montaje:
 
 ```bash
 automation/agent-swarm/bin/swarm-smb-mount mount \

@@ -111,26 +111,28 @@ It must return the destination name without requesting a password or fingerprint
 
 ## Optional: interactive zsh shortcut
 
-After configuring and verifying the SSH alias, you can add a shortcut to `~/.zshrc` on the origin. This example uses the registered destination `wsl-leo`; adapt it to your host. If `aiconnect` already exists, add a corresponding case to that function instead of redefining it.
+`aiconnect` is an optional convenience function for opening an interactive SSH terminal on a registered host; Agent Swarm does not need it for delegation. Add the following function to `~/.zshrc` on the origin **after** configuring and verifying SSH aliases. Pass it a name from `swarm-delegate list`; it selects the corresponding SSH alias rather than a raw address:
 
 ```zsh
 aiconnect() {
   if (( $# != 1 )); then
-    printf 'Usage: aiconnect <target>\n' >&2
+    printf 'Usage: aiconnect <registered-host>\n' >&2
     return 2
   fi
-  case "$1" in
-    wsl-leo) command ssh swarm-wsl-leo ;;
-    *) printf 'Unknown host: %s\n' "$1" >&2; return 2 ;;
-  esac
+  local target=$1
+  if [[ ! $target =~ '^[a-z0-9-]+$' ]]; then
+    printf 'Invalid Agent Swarm target: %s\n' "$target" >&2
+    return 2
+  fi
+  command ssh "swarm-$target"
 }
 ```
 
-Run `source ~/.zshrc` or open a new terminal. Connect with `aiconnect wsl-leo` if that is the configured target. The shortcut uses the existing SSH alias and does not configure or bypass its security checks.
+If you already have an `aiconnect` function, adapt its routing instead of redefining it. Run `source ~/.zshrc` or open a new terminal, then use `aiconnect <registered-host>`. The function checks only the name's syntax; confirm registration with `swarm-delegate list` before use. This example assumes setup-generated `swarm-<target>` aliases; for custom aliases, use the registry's `ssh_alias` instead. It delegates SSH host verification and connection options to the existing alias; an SSH connection alone does not prove that a particular project is available on that host.
 
 ## Use with Agent Swarm
 
-Once both directions respond, confirm registry and catalog with `swarm-delegate preflight <target>`. If the destination is a spoke and reports `catalog_missing`, configure its SMB mount before submitting tasks. See [Add a host to the Agent Swarm channel](../../setup/add-host.md) for the complete process and [SMB mounting between machines](smb-mount.md) for persistent mounting.
+Once both directions respond, confirm registry and catalog with `swarm-delegate preflight <target>`. If a shared-catalog spoke reports `catalog_missing`, configure its SMB mount; a local-only spoke instead needs its pre-provisioned catalog and checkout. For a specific task, check `swarm-delegate preflight <target> --project <catalog-relative-project>` before submitting; `project_unavailable` means that project is not on the target. See [Add a host to the Agent Swarm channel](../../setup/add-host.md) for the complete process and [SMB mounting between machines](smb-mount.md) for persistent mounting.
 
 ## Per-direction rollback
 
@@ -138,4 +140,4 @@ Once both directions respond, confirm registry and catalog with `swarm-delegate 
 
 ## Final check
 
-In each direction, verify that `ssh swarm-<target> hostname` works without a password and that the alias matches the host in `config/hosts.json`. From a registered host, `swarm-delegate preflight <target>` must return `"status": "ready"` after mounting the catalog on a `spoke`. A successful SSH connection alone does not show that Pi, Herdr, and bidirectional acceptance work: complete the `swarm-setup` phases and inspect their status.
+In each direction, verify that `ssh swarm-<target> hostname` works without a password and that the alias matches the host in `config/hosts.json`. From a registered host, `swarm-delegate preflight <target> --project <catalog-relative-project>` must return `"status": "ready"` for the requested project; shared-catalog spokes require SMB mounting, while local-only spokes require a local checkout and project. A successful SSH connection alone does not show that Pi, Herdr, and bidirectional acceptance work: complete the `swarm-setup` phases and inspect their status.
