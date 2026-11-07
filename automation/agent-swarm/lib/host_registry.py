@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -10,7 +11,8 @@ _NAME = re.compile(r'^[a-z0-9-]+$')
 _TOP_LEVEL = {'version', 'hub', 'share', 'hosts'}
 _SHARE = {'host', 'name', 'user'}
 _HOST = {'hostname_prefix', 'role', 'ssh_alias', 'address', 'catalog_root', 'repo', 'path', 'gui_cwd', 'runtimes'}
-_OPTIONAL_HOST = {'fallback_addresses', 'share_hosts'}
+_OPTIONAL_HOST = {'fallback_addresses', 'share_hosts', 'catalog_mode'}
+_CATALOG_MODES = {'smb', 'local'}
 _ADDRESS = re.compile(r'^[A-Za-z0-9][A-Za-z0-9.-]*$')
 
 
@@ -59,6 +61,9 @@ class HostRegistry:
                 raise RegistryError('INVALID_HOST_REGISTRY')
             if host['role'] not in ('hub', 'spoke') or not _name(host['ssh_alias']) or not isinstance(host['address'], str) or not _ADDRESS.fullmatch(host['address']):
                 raise RegistryError('INVALID_HOST_REGISTRY')
+            catalog_mode = host.get('catalog_mode', 'smb')
+            if catalog_mode not in _CATALOG_MODES or (catalog_mode == 'local' and host['role'] != 'spoke'):
+                raise RegistryError('INVALID_HOST_REGISTRY')
             fallbacks = host.get('fallback_addresses')
             if fallbacks is not None and (not isinstance(fallbacks, list) or not fallbacks or any(not isinstance(address, str) or not _ADDRESS.fullmatch(address) for address in fallbacks) or len(fallbacks) != len(set(fallbacks)) or host['address'] in fallbacks):
                 raise RegistryError('INVALID_HOST_REGISTRY')
@@ -67,6 +72,11 @@ class HostRegistry:
                 raise RegistryError('INVALID_HOST_REGISTRY')
             if not all(_absolute(host[key]) for key in ('catalog_root', 'repo', 'gui_cwd')):
                 raise RegistryError('INVALID_HOST_REGISTRY')
+            if catalog_mode == 'local':
+                root = os.path.normpath(host['catalog_root'])
+                repo = os.path.normpath(host['repo'])
+                if shares is not None or root == repo or os.path.commonpath((root, repo)) != root:
+                    raise RegistryError('INVALID_HOST_REGISTRY')
             if not isinstance(host['path'], str) or not host['path']:
                 raise RegistryError('INVALID_HOST_REGISTRY')
             runtimes = host['runtimes']

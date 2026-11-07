@@ -13,8 +13,8 @@ The contract excludes copying credentials, automated logins, SSH access without 
 | Element | Responsibility |
 | --- | --- |
 | Hub | Defines the SMB-published catalog and is the registry's `hub`. |
-| Spoke | Uses the catalog mounted at `/Volumes/<share.name>` when it needs the shared project. |
-| Registry | `config/hosts.json` (local, Git-ignored; template: `config/hosts.example.json`) defines the share and each host's hostname prefix, role, SSH alias, address, catalog, checkout, PATH, GUI cwd, and runtimes. |
+| Spoke | In default `catalog_mode: smb`, uses the mounted shared catalog. In `catalog_mode: local`, uses its pre-provisioned local catalog and checkout; SMB is not installed, copied, or mounted. |
+| Registry | `config/hosts.json` (local, Git-ignored; template: `config/hosts.example.json`) defines the share and each host's hostname prefix, role, SSH alias, address, `catalog_mode` (default `smb`), catalog, checkout, PATH, GUI cwd, and runtimes. |
 | SSH | Connects a `swarm-<target>` alias in each direction. A person verifies fingerprints; dedicated keys disable forwarding but do not make SSH a sandbox. |
 | SMB | Carries only the approved catalog; credentials stay in the Keychain of the mounting Mac. |
 | Herdr + Pi | The destination creates and controls only its own resources: one tab, Pi agent, and private session per task. |
@@ -25,7 +25,7 @@ Names, paths, and endpoints always come from the registry. The same user name on
 ## Task flow
 
 1. The origin runs `swarm-delegate list` and confirms the registered destination; `self` identifies the local host.
-2. `preflight <target>` checks SSH and the catalog. If a spoke reports `catalog_missing`, mount its SMB catalog before sending work.
+2. `preflight <target> --project <catalog-relative-project>` checks SSH, the catalog, and that target's own project. A shared-mode `catalog_missing` needs its SMB catalog mounted; a local-mode `catalog_missing` needs its configured local catalog and checkout provisioned. `project_unavailable` means the target does not contain that project.
 3. The origin sends an envelope on stdin containing exactly `task_id`, `origin_host`, `project`, `goal`, `acceptance`, and `mode: executor`.
 4. `swarm-delegate` uses batch-mode SSH to run `swarm-herdr-task submit` in the checkout declared by the destination.
 5. The adapter reserves the UUID in a durable ledger, creates a private session and unfocused Herdr tab, then starts Pi with closed argv.
@@ -46,7 +46,7 @@ Names, paths, and endpoints always come from the registry. The same user name on
 
 ## Onboarding lifecycle
 
-`swarm-setup add-host` coordinates resumable onboarding from a registered host. Its phases validate the origin, wait for Remote Login, verify fingerprints and keys in both directions, check runtimes, mount the spoke SMB catalog, update the registry, install the skill, configure local updates, and run Herdr + Pi acceptance.
+`swarm-setup add-host` coordinates resumable onboarding from a registered host. Shared mode is the default and its spoke phase mounts SMB. A local-only spoke uses paired absolute `--local-catalog-root` and `--local-repo` paths (the checkout must be inside the root), validates that remote checkout before registry update, and skips SMB mounting. This limits shared-catalog exposure but requires separately provisioned projects. Both modes then install the skill, configure local updates, and run Herdr + Pi acceptance.
 
 Remote Login, fingerprint, Pi login, and first SMB-mount pauses are local human decisions. Re-running the same command retains state and resumes the pending phase; it never substitutes invented registry paths or names.
 
@@ -61,9 +61,9 @@ Remote Login, fingerprint, Pi login, and first SMB-mount pauses are local human 
 
 ## Review checklist
 
-- [ ] The registry lists exactly the intended hosts and share.
+- [ ] The registry lists exactly the intended hosts and, for shared mode, share.
 - [ ] Every SSH direction has an alias, verified fingerprint, and dedicated key.
-- [ ] The SMB catalog is restricted to the approved share and available where needed.
+- [ ] A shared-mode SMB catalog is restricted to the approved share where needed; a local-only catalog and checkout are pre-provisioned only on that target.
 - [ ] Pi, gentle-pi, and Herdr are installed and authenticated locally at every destination.
 - [ ] The envelope uses a UUID and relative project; ambiguity is recovered, not resent.
 - [ ] Only resources created by the identified task are closed.

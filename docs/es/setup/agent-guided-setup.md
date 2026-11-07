@@ -1,16 +1,16 @@
 # Instalación guiada de Agent Swarm
 
-La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente. Linux/WSL ejecuta las mismas diez fases con CIFS y timers systemd de usuario; se ha probado una delegación real hacia este WSL, pero la aceptación bidireccional entre dos máquinas sigue sin validarse.
+La ruta de alta es `swarm-setup add-host` desde un nodo macOS o Linux/WSL ya registrado. El proceso configura el canal Herdr + Pi de forma reanudable y se detiene para las decisiones que sólo puede tomar una persona en el host correspondiente. Linux/WSL ejecuta las mismas diez fases; los spokes con catálogo compartido usan CIFS y timers systemd de usuario para el montaje, mientras que los de catálogo local omiten SMB. Se ha probado una delegación real hacia WSL, pero la aceptación bidireccional entre dos máquinas sigue sin validarse.
 
 ## Camino rápido
 
 1. Confirme que el origen figura en `config/hosts.json` (registro local no versionado; cree uno desde `config/hosts.example.json` si falta) y ejecute el comando desde su checkout local.
 2. Ejecute el procedimiento descrito en [Agregar un equipo](add-host.md#camino-rápido) con el nombre, dirección y usuario del equipo nuevo. Para Linux/WSL, siga primero [la preparación](add-host.md#linuxwsl-preparación).
-3. Complete las pausas locales: acceso SSH, comparación de huella y login de Pi; para SMB, Finder/Keychain en macOS o fstab y credenciales locales en Linux.
+3. Complete las pausas locales: acceso SSH, comparación de huella y login de Pi; en el modo compartido predeterminado, SMB usa Finder/Keychain en macOS o fstab y credenciales locales en Linux. Un spoke sólo local requiere en cambio catálogo y checkout de Agent Swarm ya aprovisionados.
 4. Repita el mismo comando con las mismas opciones hasta que la aceptación bidireccional termine correctamente.
-5. Antes de delegar trabajo, ejecute `swarm-delegate preflight <destino>` y siga el [runbook de validación](../runbooks/agent-swarm/validation.md).
+5. Antes de delegar trabajo, ejecute `swarm-delegate preflight <destino> --project <proyecto-relativo-al-catálogo>` y siga el [runbook de validación](../runbooks/agent-swarm/validation.md).
 
-El registro es la fuente de verdad. Sus campos `hosts`, `share` y roles determinan alias, endpoints, usuarios, catálogo, repositorio y rutas. No reemplace esos datos por nombres de equipos, IPs o rutas de otro despliegue. Un host puede tener además `fallback_addresses` ordenadas para SSH y `share_hosts` para su montaje SMB; ambas son opcionales, por lo que los registros existentes siguen siendo válidos.
+El registro es la fuente de verdad. Sus campos `hosts`, `share`, rol y `catalog_mode` (predeterminado `smb`) determinan alias, endpoints, usuarios, catálogo, repositorio y rutas. Un spoke `local` usa las rutas absolutas emparejadas `--local-catalog-root` y `--local-repo` (repo dentro de la raíz), omite SMB sin instalar ni copiar su utilidad de montaje y cambia acceso al catálogo compartido por menor exposición. Consulte `swarm-setup add-host --help` para las opciones exactas. No reemplace esos datos por nombres de equipos, IPs o rutas de otro despliegue. Un host puede tener además `fallback_addresses` ordenadas para SSH y `share_hosts` para su montaje SMB; ambas son opcionales, por lo que los registros existentes siguen siendo válidos.
 
 ## Candidatos de dirección y failover
 
@@ -26,7 +26,7 @@ SSH prueba los candidatos en orden; un candidato inalcanzable añade como máxim
 - En ambas plataformas es obligatoria la integración oficial de Herdr para Pi: `herdr integration status` debe confirmar Pi instalado. `--install-missing` ejecuta `herdr integration install pi` si Herdr está disponible (dry-run sólo anuncia el plan); instala `~/.pi/agent/extensions/herdr-agent-state.ts`. Sin ella falta la prueba de propiedad `agent_session` de tipo `path` y fuente `herdr:pi`: submit puede quedar `unknown` sin entregar el prompt.
 - Para arrancar Herdr sin GUI en Linux, ejecute `herdr` en una terminal normal y desacople el cliente, o use una pty con filas y columnas no nulas. El servidor sobrevive a la salida del cliente. Herdr 0.9.5 rechaza una terminal con cuadrícula cero (`cannot attach without a usable terminal: terminal reported a zero-sized grid`) y no tiene `herdr server start` (sólo `server stop` y `server reload-config`). Compruebe `herdr tab list`; `server_not_running` indica que falta arrancarlo. La espera muestra los nombres de probes ausentes y las instrucciones de arranque cuando falta `herdr-server`.
 - Setup y swarm-update descubren `$HOME/.pi/agent/bin`, donde instala Pi su instalador, inmediatamente después de `$HOME/.local/bin`; conservan las demás rutas y su orden.
-- Para un spoke, use `swarm-smb-mount fstab-line --host H --share S --user U`. Una persona añade la línea exacta a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup monta y configura un timer de usuario cada 300 s; si no hay `systemctl --user`, advierte que no activó la persistencia.
+- Para un spoke de modo compartido, use `swarm-smb-mount fstab-line --host H --share S --user U`. Un spoke sólo local no debe instalar, copiar ni montar SMB; aprovisione su catálogo local y checkout ejecutable configurados antes del alta. Una persona añade la línea exacta a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup monta y configura un timer de usuario cada 300 s; si no hay `systemctl --user`, advierte que no activó la persistencia.
 - La actualización diaria usa `agent-swarm-update.timer`, salvo `--no-auto-update`. En WSL, habilite `[boot]` / `systemd=true` en `/etc/wsl.conf`; los timers requieren sesión de usuario salvo que active `loginctl enable-linger $USER`.
 - Un hub Linux debe publicar manualmente el catálogo mediante su propio servidor SMB (por ejemplo Samba); el setup no lo configura. Windows puede ocupar el puerto TCP 445 en loopback: use otro puerto para una prueba SMB local.
 
@@ -54,6 +54,6 @@ Las verificaciones de huella y login son comunes. Las acciones SSH y SMB depende
 
 ## Operación posterior
 
-Use `swarm-delegate list` para ver los destinos, `self` para identificar el origen y `preflight <destino>` antes de enviar una tarea. El [runbook de tareas Herdr + Pi](../runbooks/agent-swarm/herdr-tasks.md) describe `submit`, `recover` y `close`, incluido el requisito de conservar el mismo UUID tras un fallo de transporte.
+Use `swarm-delegate list` para ver los destinos, `self` para identificar el origen y `preflight <destino> --project <proyecto-relativo-al-catálogo>` antes de enviar una tarea. `project_unavailable` significa que al destino le falta ese proyecto; el modo sólo local requiere aprovisionarlo localmente, no SMB. El [runbook de tareas Herdr + Pi](../runbooks/agent-swarm/herdr-tasks.md) describe `submit`, `recover` y `close`, incluido el requisito de conservar el mismo UUID tras un fallo de transporte.
 
 Para un diagnóstico de fases, opciones, estado y recuperación, consulte [Agregar un equipo](add-host.md). Para SSH y SMB, use respectivamente [Canal SSH](../runbooks/agent-swarm/ssh-channel.md) y [Montaje SMB](../runbooks/agent-swarm/smb-mount.md).

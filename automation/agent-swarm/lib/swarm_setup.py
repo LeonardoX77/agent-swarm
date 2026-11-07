@@ -42,12 +42,14 @@ class Setup:
                  registry=None, registry_path=None, runner=None, home=None, nodename=None,
                  tty=None, uid=None, output=None, sleep=None, clock=None, reader=None,
                  local_system=None, ssh_port=22, origin_ssh_port=None, fallback_addresses=(),
-                 origin_addresses=(), share_hosts=()):
+                 origin_addresses=(), share_hosts=(), local_catalog_root=None, local_repo=None):
         # An explicitly requested origin port (even 22) must be checked against an existing reverse alias.
         self.origin_ssh_port_explicit = origin_ssh_port is not None
         self.ssh_port, self.origin_ssh_port = ssh_port, 22 if origin_ssh_port is None else origin_ssh_port
         self.name, self.address, self.user, self.role = name, address, user, role
         self.fallback_addresses, self.origin_addresses, self.share_hosts = list(fallback_addresses), list(origin_addresses), list(share_hosts)
+        self.local_catalog_root, self.local_repo = local_catalog_root, local_repo
+        self.catalog_mode = "local" if local_catalog_root is not None or local_repo is not None else "smb"
         self.host_fingerprint, self.origin_user = host_fingerprint, origin_user
         self.auto_update, self.update_time, self.install_missing = auto_update, update_time, install_missing
         self.skip_live, self.dry_run, self.no_wait, self.wait_timeout, self.verbose = skip_live, dry_run, no_wait, wait_timeout, verbose
@@ -212,6 +214,19 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
     @staticmethod
     def result(status, detail): return status, detail
 
+    @staticmethod
+    def local_catalog_paths(catalog_root, repo):
+        if not isinstance(catalog_root, str) or not isinstance(repo, str) or not catalog_root or not repo:
+            raise SetupError("Invalid local catalog paths")
+        catalog_root, repo = os.path.normpath(catalog_root), os.path.normpath(repo)
+        if not os.path.isabs(catalog_root) or not os.path.isabs(repo) or repo == catalog_root:
+            raise SetupError("Invalid local catalog paths")
+        try: relative = os.path.relpath(repo, catalog_root)
+        except ValueError: raise SetupError("Invalid local catalog paths")
+        if relative in (".", "..") or relative.startswith(".." + os.sep):
+            raise SetupError("Invalid local catalog paths")
+        return catalog_root, repo
+
     def local_preflight(self):
         candidate_values = [self.address, *self.fallback_addresses, *self.origin_addresses, *self.share_hosts]
         if (not NAME.fullmatch(self.name) or not self.user or any(not ADDRESS.fullmatch(value) for value in candidate_values)
@@ -219,6 +234,10 @@ printf '%s\\n' "${paths:+$paths:}/usr/bin:/bin:/usr/sbin:/sbin"
                 or len(self.origin_addresses) != len(set(self.origin_addresses)) or len(self.share_hosts) != len(set(self.share_hosts))
                 or (self.role == "hub" and self.share_hosts)):
             raise SetupError("Invalid host name, address, or user")
+        if self.catalog_mode == "local":
+            if self.role != "spoke" or self.share_hosts:
+                raise SetupError("Invalid local catalog paths")
+            self.local_catalog_root, self.local_repo = self.local_catalog_paths(self.local_catalog_root, self.local_repo)
         self.origin = self.registry.self_host(self.nodename)
         if not self.origin: raise SetupError("This host is not the registry self_host")
         for option, alias, phase in (("ssh_port", self.name, "ssh-to-new"), ("origin_ssh_port", self.origin["name"], "ssh-to-origin")):
@@ -511,6 +530,7 @@ if not m:
 
     def mount(self):
         if self.role != "spoke": return self.result("skipped", "skipped for hub role")
+        if self.catalog_mode == "local": return self.result("skipped", "skipped for local catalog")
         system = self.remote_system_name()
         share = self.registry.share; hosts = self.share_hosts or [share["host"]]; host_args = " ".join("--host " + shlex.quote(host) for host in hosts); vals = tuple(shlex.quote(share[x]) for x in ("name", "user")); tool = self.remote_home_path("/.local/agent-swarm/bin/swarm-smb-mount")
         check = "%s status %s --share %s --user %s" % (shlex.quote(tool), host_args, *vals)
@@ -563,16 +583,30 @@ if not m:
     def build_registry_entry(self):
         root = self.origin["catalog_root"]
         relative = os.path.relpath(self.origin["repo"], root)
-        catalog = root
+        catalog, repo = root, str(Path(root) / relative)
         if self.role == "spoke":
-            catalog = self.catalog_path()
+            catalog, repo = self.catalog_path(), str(Path(self.catalog_path()) / relative)
+        if self.catalog_mode == "local":
+            catalog, repo = self.local_catalog_root, self.local_repo
         facts = self.remote_facts()
-        entry = {"hostname_prefix": facts["hostname_prefix"], "role": self.role, "ssh_alias": "swarm-" + self.name, "address": self.address, "catalog_root": catalog, "repo": str(Path(catalog) / relative), "path": facts["path"], "gui_cwd": self.remote_home_path("/tmp"), "runtimes": ["pi"] + (["claude"] if facts["claude"] else [])}
+        entry = {"hostname_prefix": facts["hostname_prefix"], "role": self.role, "ssh_alias": "swarm-" + self.name, "address": self.address, "catalog_mode": self.catalog_mode, "catalog_root": catalog, "repo": repo, "path": facts["path"], "gui_cwd": self.remote_home_path("/tmp"), "runtimes": ["pi"] + (["claude"] if facts["claude"] else [])}
         if self.fallback_addresses: entry["fallback_addresses"] = list(self.fallback_addresses)
         if self.share_hosts: entry["share_hosts"] = list(self.share_hosts)
         return entry
 
     def registry_phase(self):
+        if self.catalog_mode == "local":
+            check = """import json,pathlib,sys
+root=pathlib.Path(json.loads(sys.argv[1])).resolve(strict=True)
+repo=pathlib.Path(json.loads(sys.argv[2])).resolve(strict=True)
+if repo == root: raise SystemExit(1)
+try: repo.relative_to(root)
+except ValueError: raise SystemExit(1)
+adapter=repo/'automation/agent-swarm/bin/swarm-delegate'
+if not adapter.is_file() or not adapter.stat().st_mode & 0o111: raise SystemExit(1)
+"""
+            if self.remote_python(check, (self.local_catalog_root, self.local_repo)).returncode:
+                raise SetupError("Local catalog is not ready on remote host; provision the configured catalog and repo before setup")
         entry = self.build_registry_entry(); self.generated_registry_entry = entry; existing = self.registry.hosts.get(self.name)
         if existing and {k:v for k,v in existing.items() if k != "name"} == entry: return self.result("ok", "registry entry already configured")
         if self.dry_run: return self.result("changed", "would update registry entry")
@@ -667,16 +701,19 @@ if n!=s:
             configured = self.state["phases"].get("acceptance", {}).get("status") == "ok" and not self.changed
             return self.result("ok" if configured else "changed", "acceptance already configured" if configured else "would run live acceptance (no prior accepted state or other phases would change)")
         local = Path(__file__).resolve().parents[3] / "automation/agent-swarm/bin/swarm-delegate"
-        if self.command([str(local), "preflight", self.name]).returncode: raise SetupError("Origin preflight failed")
-        remote_delegate = self.registry.get(self.name)["repo"] + "/automation/agent-swarm/bin/swarm-delegate"
-        if self.remote_tool(shlex.quote(remote_delegate) + " preflight " + shlex.quote(self.origin["name"])).returncode: raise SetupError("Remote preflight failed")
+        new_host = self.registry.get(self.name)
+        origin_project = os.path.relpath(self.origin["repo"], self.origin["catalog_root"])
+        remote_project = os.path.relpath(new_host["repo"], new_host["catalog_root"])
+        if self.command([str(local), "preflight", self.name, "--project", remote_project]).returncode: raise SetupError("Origin preflight failed")
+        remote_delegate = new_host["repo"] + "/automation/agent-swarm/bin/swarm-delegate"
+        remote_preflight = shlex.quote(remote_delegate) + " preflight " + shlex.quote(self.origin["name"]) + " --project " + shlex.quote(origin_project)
+        if self.remote_tool(remote_preflight).returncode: raise SetupError("Remote preflight failed")
         if self.skip_live or (self.state["phases"].get("acceptance", {}).get("status") == "ok" and not self.changed): return self.result("skipped", "live acceptance skipped")
         # Delegates own task lifecycle; reject every response that does not return the nonce.
-        new_host = self.registry.get(self.name)
         directions = (
-            (self.name, self.origin["name"], os.path.relpath(self.origin["repo"], self.origin["catalog_root"]),
+            (self.name, self.origin["name"], remote_project,
              [str(local), "submit", self.name], [str(local), "recover", self.name], [str(local), "close", self.name]),
-            (self.origin["name"], self.name, os.path.relpath(new_host["repo"], new_host["catalog_root"]),
+            (self.origin["name"], self.name, origin_project,
              ["ssh", "swarm-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " submit " + shlex.quote(self.origin["name"]))],
              ["ssh", "swarm-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " recover " + shlex.quote(self.origin["name"]))],
              ["ssh", "swarm-" + self.name, self.tool_command(shlex.quote(remote_delegate) + " close " + shlex.quote(self.origin["name"]))]),

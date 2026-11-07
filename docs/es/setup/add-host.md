@@ -9,7 +9,7 @@ El camino canónico para incorporar un equipo macOS o Linux/WSL es ejecutar **un
 - El nodo de origen (macOS o Linux/WSL) ya está registrado en `config/hosts.json` y se ejecuta el comando desde su checkout del repositorio. Ese archivo es local y no se versiona: si no existe, copie `config/hosts.example.json` y sustituya los valores de ejemplo por los reales.
 - Para el camino macOS siguiente, el equipo nuevo usa macOS y la persona puede sentarse delante de él para algunos pasos GUI. Para Linux/WSL, siga [la preparación](#linuxwsl-preparación).
 - **Pi y gentle-pi son obligatorios; Claude es opcional; Herdr es obligatorio.**
-- Hay conectividad LAN o Tailscale hacia `<host>.local` y se conoce la cuenta `<user>` del Mac nuevo.
+- Hay conectividad LAN o Tailscale hacia `<host>.local` y se conoce la cuenta `<user>` del Mac nuevo. El modo compartido es el predeterminado; un spoke sólo local necesita además una raíz de catálogo remoto y un checkout ejecutable de Agent Swarm ya aprovisionados dentro de ella.
 
 Desde el Mac registrado, ejecute:
 
@@ -20,7 +20,20 @@ automation/agent-swarm/bin/swarm-setup add-host \
   [--update-time 04:30 | --no-auto-update] [--verbose]
 ```
 
-El valor predeterminado instala la actualización diaria a las `04:30`; use `--no-auto-update` si no quiere activar ese calendario. Esto no instala una comprobación de actualizaciones en el primer uso remoto: es una función distinta. Agent Swarm no gestiona ni garantiza los avisos de paquetes que pueda mostrar Pi al iniciarse. `--install-missing` usa las herramientas existentes e intenta añadir sólo Herdr, gentle-pi y la integración oficial de Herdr para Pi cuando sus CLI base están disponibles; no reinstala todo el Mac.
+El valor predeterminado instala la actualización diaria a las `04:30`; use `--no-auto-update` si no quiere activar ese calendario.
+
+### Spoke sólo local (sin SMB)
+
+El modo compartido es el predeterminado. Para evitar exponer el catálogo compartido a un spoke remoto, aprovisione primero su catálogo y checkout ejecutable de Agent Swarm, y use las dos opciones de ruta local:
+
+```sh
+automation/agent-swarm/bin/swarm-setup add-host \
+  --name isolated-node --address isolated-node.local --user <user> \
+  --local-catalog-root /srv/catalog \
+  --local-repo /srv/catalog/agent-swarm
+```
+
+Ambas rutas deben ser absolutas; `--local-repo` debe estar estrictamente dentro de `--local-catalog-root`. Sólo se aceptan para un `spoke` y no se pueden combinar con `--share-host`. Setup verifica las rutas remotas y el checkout ejecutable antes de escribir el registro, guarda `catalog_mode: local` y omite por completo el montaje SMB: no copia ni instala `swarm-smb-mount`. El aislamiento es deliberado: los proyectos deben existir ya en ese catálogo local. Use `swarm-setup add-host --help` para consultar la ayuda exacta. Esto no instala una comprobación de actualizaciones en el primer uso remoto: es una función distinta. Agent Swarm no gestiona ni garantiza los avisos de paquetes que pueda mostrar Pi al iniciarse. `--install-missing` usa las herramientas existentes e intenta añadir sólo Herdr, gentle-pi y la integración oficial de Herdr para Pi cuando sus CLI base están disponibles; no reinstala todo el Mac.
 
 ### Candidatos de dirección y ejemplo WSL
 
@@ -68,7 +81,7 @@ Active SSH y prepare Node, Python 3 y Pi en el destino, con login de Pi local y 
 
 En WSL, Windows OpenSSH suele ocupar el puerto 22: si el `sshd` de WSL escucha, por ejemplo, en `127.0.0.1:2222`, use `--address 127.0.0.1 --ssh-port 2222` desde un origen que pueda alcanzar esa dirección. Use `--origin-ssh-port 2222` si el destino debe volver al origen por ese puerto. Ambos valores predeterminados son 22. El alias de SSH config lleva el puerto (`Port` sólo si no es 22); el esquema del registro no cambia. Reanude con los mismos puertos: cambiarlos provoca un error de conflicto de alias, nunca una sobrescritura silenciosa.
 
-Para un spoke, prepare el acceso CIFS siguiendo [Montaje SMB](../runbooks/agent-swarm/smb-mount.md#linuxwsl-preparación): `swarm-smb-mount fstab-line --host H --share S --user U` imprime la línea exacta y la plantilla de credenciales. En Linux, repita `--host` en orden de preferencia al usar candidatos SMB; `fstab-line` devuelve `fstab_lines`, una línea fstab por host. La elección de fallback ocurre sólo al montar: un recurso ya montado no cambia de host en vivo, así que vuelva a montarlo para cambiarlo. El estado informa del candidato activo. La selección de una entrada fstab por origen (`mount //HOST/SHARE`) cuando varias entradas usan el mismo punto de montaje aún no se ha verificado en Linux real. Una persona añade la línea a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup ejecuta el montaje y activa un timer de usuario cada 300 s; si `systemctl --user` no está disponible, el montaje puede funcionar pero la persistencia se degrada con una advertencia.
+Para un spoke en **modo compartido**, prepare el acceso CIFS siguiendo [Montaje SMB](../runbooks/agent-swarm/smb-mount.md#linuxwsl-preparación): `swarm-smb-mount fstab-line --host H --share S --user U` imprime la línea exacta y la plantilla de credenciales. En Linux, repita `--host` en orden de preferencia al usar candidatos SMB; `fstab-line` devuelve `fstab_lines`, una línea fstab por host. La elección de fallback ocurre sólo al montar: un recurso ya montado no cambia de host en vivo, así que vuelva a montarlo para cambiarlo. El estado informa del candidato activo. La selección de una entrada fstab por origen (`mount //HOST/SHARE`) cuando varias entradas usan el mismo punto de montaje aún no se ha verificado en Linux real. Una persona añade la línea a `/etc/fstab` como root, crea `/mnt/<share>` y crea `~/.config/agent-swarm/smb-credentials` con modo `0600`. La herramienta nunca usa sudo ni maneja contraseñas. El setup ejecuta el montaje y activa un timer de usuario cada 300 s; si `systemctl --user` no está disponible, el montaje puede funcionar pero la persistencia se degrada con una advertencia.
 
 El catálogo del spoke es `/mnt/<share>` (macOS: `/Volumes/<share>`). El registro conserva la ruta del proyecto relativa al catálogo del origen: por ejemplo, `/srv/projects/agent-swarm` bajo `/srv/projects` pasa a `/mnt/shared-projects/agent-swarm`. El registro usa `gui_cwd` = `$HOME/tmp` del destino y crea ese directorio; los prefijos de hostname se comparan sin distinguir mayúsculas. `swarm-delegate` prefiere `/usr/bin/python3` y, si no es ejecutable, resuelve `python3` en el `PATH` del registro.
 
@@ -85,7 +98,7 @@ Los timers de usuario sólo funcionan mientras haya una sesión del usuario, sal
 
 ## Las diez fases
 
-Los nombres de fase siguientes son los que imprime el programa exactamente. Ambas plataformas ejecutan las diez fases; `mount` se omite para un hub y `auto-update` sólo se omite con `--no-auto-update`.
+Los nombres de fase siguientes son los que imprime el programa exactamente. Ambas plataformas ejecutan las diez fases; `mount` se omite para un hub o spoke sólo local y `auto-update` sólo se omite con `--no-auto-update`.
 
 | Fase | Qué hace el script | Quién actúa | Si se detiene, texto exacto que muestra |
 | --- | --- | --- | --- |
@@ -94,7 +107,7 @@ Los nombres de fase siguientes son los que imprime el programa exactamente. Amba
 | `ssh-to-new` | Crea o reutiliza la clave origen→nuevo, verifica la huella, configura `known_hosts`, autoriza la clave y crea `swarm-<name>`. | Persona y agente | Huella en TTY: `Type the fingerprint shown on <name> (or yes): `; clave: `On <name> run this exact command, then continue:` seguido del comando de autorización. |
 | `runtimes` | Comprueba Node, Python, Herdr, Pi, gentle-pi, la integración Herdr Pi, el servidor Herdr y, sólo en macOS, Homebrew; `--install-missing` puede añadir Herdr, gentle-pi y la integración. | Persona | macOS conserva `On <name>: install missing runtimes and log Pi in once from the GUI` y añade `; missing probes: <nombres>`; Linux usa `locally` en vez de `from the GUI` y añade instrucciones de arranque si falta `herdr-server`.  |
 | `ssh-to-origin` | Configura el canal SSH inverso nuevo→origen, incluida la huella del origen y el alias remoto. | Agente | No espera a una persona. Un conflicto de huella o alias falla de forma segura. |
-| `mount` | En un `spoke`, copia la utilidad de montaje e instala el montaje SMB persistente usando `share` del registro. | Persona | macOS: `On <name>, connect in Finder to smb://<share.user>@<share.host>/<share.name> and save the password`; Linux: instrucciones fstab y credenciales generadas para el destino. |
+| `mount` | En un `spoke` de modo compartido, copia la utilidad de montaje e instala el SMB persistente usando `share`; se omite para un spoke sólo local. | Persona | Modo compartido: Finder/Keychain en macOS o fstab y credenciales en Linux; sólo local: no hay acción SMB. |
 | `registry` | Descubre datos del nuevo host y escribe su entrada en `config/hosts.json`. | Agente | No espera a una persona. |
 | `skill` | Copia la skill `agent-swarm-remote` y su bloque bootstrap al equipo nuevo. | Agente | No espera a una persona. |
 | `auto-update` | Instala `swarm-update` y su LaunchAgent (macOS) o timer systemd de usuario (Linux), salvo `--no-auto-update`. | Agente | No espera a una persona. |
@@ -176,7 +189,9 @@ En Linux, siga la preparación CIFS anterior y ejecute el comando de montaje que
 | `--origin-ssh-port PORT` | Puerto del sshd del origen al que se conecta el destino; entero de 1 a 65535, predeterminado 22. |
 | `--fallback-address ADDR` | Candidato SSH repetible después de `--address`, en orden. |
 | `--origin-address ADDR` | Candidato SSH repetible para el alias inverso; sustituye los candidatos del registro del origen sólo para ese alias. |
-| `--share-host HOST` | Host SMB ordenado y repetible para un `spoke`; se rechaza para un `hub`. |
+| `--share-host HOST` | Host SMB ordenado y repetible para un `spoke` de modo compartido; se rechaza para un `hub` o alta sólo local. |
+| `--local-catalog-root ROOT` | Raíz absoluta de catálogo remoto para un spoke sólo local; requiere `--local-repo` y omite el montaje SMB. |
+| `--local-repo REPO` | Checkout ejecutable de Agent Swarm, absoluto y ya aprovisionado dentro de `--local-catalog-root`; obligatorio con ella. |
 | `--install-missing` | Herdr: Homebrew en macOS o instalador oficial vía curl en Linux; gentle-pi: mediante Pi; integración Pi: `herdr integration install pi`, en ambas plataformas. |
 | `--auto-update` / `--no-auto-update` | Activa (predeterminado) u omite el calendario diario: launchd en macOS, systemd de usuario en Linux. |
 | `--update-time HH:MM` | Hora diaria en ambas plataformas; el predeterminado es `04:30`. |
@@ -195,7 +210,7 @@ Consulte el estado persistido con:
 automation/agent-swarm/bin/swarm-setup status --name <name>
 ```
 
-El estado está en `~/.local/state/agent-swarm/setup/<name>.json`. El log está en `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log` para un origen macOS y en `~/.local/state/agent-swarm/logs/swarm-setup-<name>.log` para un origen Linux/WSL. Ante un error inesperado, consulte ese log y, si hace falta, reanude con `--verbose` y las mismas opciones; comparta sólo diagnóstico saneado, pues los logs pueden incluir claves **públicas**, rutas y nombres de usuario. La salida normal es resumida en inglés; `--verbose` registra cada comando, código de salida y salida recortada. Si el setup termina con salida `0`, confirme además `automation/agent-swarm/bin/swarm-delegate preflight <name>`: debe devolver `"status": "ready"`. No confunda el estado `WAITING` ni un éxito parcial de SSH con la aceptación final.
+El estado está en `~/.local/state/agent-swarm/setup/<name>.json`. El log está en `~/Library/Logs/mac-agent-swarm/swarm-setup-<name>.log` para un origen macOS y en `~/.local/state/agent-swarm/logs/swarm-setup-<name>.log` para un origen Linux/WSL. Ante un error inesperado, consulte ese log y, si hace falta, reanude con `--verbose` y las mismas opciones; comparta sólo diagnóstico saneado, pues los logs pueden incluir claves **públicas**, rutas y nombres de usuario. La salida normal es resumida en inglés; `--verbose` registra cada comando, código de salida y salida recortada. Si el setup termina con salida `0`, confirme además `automation/agent-swarm/bin/swarm-delegate preflight <name> --project <proyecto-relativo-al-catálogo>`: debe devolver `"status": "ready"`. `project_unavailable` significa que el destino no tiene ese proyecto; aprovisiónelo localmente en modo sólo local en vez de montar SMB. No confunda el estado `WAITING` ni un éxito parcial de SSH con la aceptación final.
 
 Volver a ejecutar el comando contra un host ya configurado es seguro: las fases que ya cumplen su condición informan `OK` y no cambian configuración. Un nombre existente con otra dirección, huella, lista de candidatos o alias SSH diferente falla en vez de sobrescribirlo.
 

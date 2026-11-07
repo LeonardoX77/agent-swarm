@@ -35,6 +35,29 @@ class HostRegistryTests(unittest.TestCase):
         self.assertEqual(registry.self_host('MacMiniLeo.local')['name'], 'mac-mini')
         self.assertIsNone(registry.self_host('OtherMac'))
 
+    def test_catalog_mode_defaults_to_smb_and_rejects_unknown_modes(self):
+        self.assertEqual(HostRegistry(self.write(VALID)).get('mac-mini').get('catalog_mode', 'smb'), 'smb')
+        local = {**VALID, 'hosts': {**VALID['hosts'], 'mac-mini': {**VALID['hosts']['mac-mini'], 'catalog_mode': 'local'}}}
+        self.assertEqual(HostRegistry(self.write(local)).get('mac-mini')['catalog_mode'], 'local')
+        invalid = {**local, 'hosts': {**local['hosts'], 'mac-mini': {**local['hosts']['mac-mini'], 'catalog_mode': 'unknown'}}}
+        with self.assertRaises(RegistryError):
+            HostRegistry(self.write(invalid))
+
+    def test_local_catalog_registry_rejects_paths_outside_root_and_share_hosts(self):
+        base = {**VALID['hosts']['mac-mini'], 'catalog_mode': 'local',
+                'catalog_root': '/srv/projects', 'repo': '/srv/projects/agent-swarm'}
+        for changes in ({'repo': '/srv/other/agent-swarm'}, {'repo': '/srv/projects'},
+                        {'repo': '/srv/projects/../other/agent-swarm'},
+                        {'share_hosts': ['share.example.test']}):
+            with self.subTest(changes=changes):
+                host = {**base, **changes}
+                value = {**VALID, 'hosts': {**VALID['hosts'], 'mac-mini': host}}
+                path = self.write(value)
+                before = path.read_bytes()
+                with self.assertRaisesRegex(RegistryError, '^INVALID_HOST_REGISTRY$'):
+                    HostRegistry(path)
+                self.assertEqual(path.read_bytes(), before)
+
     def test_optional_candidate_lists_are_preserved_and_validated(self):
         value = {**VALID, 'hosts': {**VALID['hosts'], 'mac-mini': {**VALID['hosts']['mac-mini'], 'fallback_addresses': ['100.64.0.2'], 'share_hosts': ['MacBookLeo.local', '192.168.1.2']}}}
         self.assertEqual(HostRegistry(self.write(value)).get('mac-mini')['fallback_addresses'], ['100.64.0.2'])

@@ -2,7 +2,7 @@
 
 # 🐝 Agent Swarm
 
-**Conecta dos o más agentes de IA que trabajan en máquinas distintas de tu red local o VPN.**
+**Conecta dos o más agentes de IA que trabajan en máquinas distintas de tu red local o VPN, con catálogo SMB compartido o checkout sólo local.**
 
 Delega tareas al equipo que esté libre, aprovecha la potencia de cálculo que ya tienes
 y deja que cada agente trabaje con sus propias herramientas, sin compartir credenciales.
@@ -34,7 +34,7 @@ flowchart LR
         N1["⚙️ Nodo A<br/>sesión Pi"]
         N2["⚙️ Nodo B<br/>sesión Pi"]
         N3["⚙️ Nodo C<br/>sesión Pi"]
-        C[("📁 Catálogo de proyectos<br/>compartido por SMB")]
+        C[("📁 Catálogo compartido<br/>(modo SMB predeterminado)")]
     end
     O -- "tarea 1" --> N1
     O -- "tarea 2" --> N2
@@ -59,7 +59,7 @@ flowchart LR
 
 ## 🖥️ Plataformas
 
-El protocolo sólo necesita herramientas Unix estándar: SSH, Python 3, un recurso SMB y Herdr con Pi. Por eso está pensado para cualquier sistema tipo Unix.
+El protocolo necesita herramientas Unix estándar, SSH, Python 3 y Herdr con Pi. Los spokes de catálogo compartido además usan un recurso SMB; los sólo locales no. Por eso está pensado para cualquier sistema tipo Unix.
 
 | Componente | macOS | Linux / WSL |
 | --- | --- | --- |
@@ -97,7 +97,7 @@ flowchart TB
 | `swarm-update` | Comprueba e instala actualizaciones de Herdr, mosh, moshi-hook, gentle-ai, Pi y las extensiones de Pi, sin `sudo`. |
 | `skills/agent-swarm-remote` | Enseña a Pi y a Claude a delegar o recibir un sobre sin salirse del contrato. |
 
-Cada nodo tiene uno de dos roles: el **hub** publica el catálogo de proyectos por SMB y los **spokes** lo montan para trabajar sobre los mismos proyectos.
+En modo **compartido** (el predeterminado), el **hub** publica el catálogo por SMB y los **spokes** lo montan para trabajar sobre los mismos proyectos. Un spoke **sólo local** usa en cambio un catálogo y un checkout de Agent Swarm ya aprovisionados: no instala, copia ni monta SMB. Reduce la exposición al catálogo compartido, a cambio de que sólo puede recibir trabajo de proyectos presentes en su propio catálogo.
 
 ## 🚀 Puesta en marcha
 
@@ -119,6 +119,17 @@ automation/agent-swarm/bin/swarm-setup add-host \
   --name spoke-node --address spoke-node.local --user your-user \
   --install-missing --no-auto-update
 ```
+
+Este es el modo compartido, el predeterminado. Para un spoke sólo local, aprovisione primero su catálogo remoto y checkout ejecutable de Agent Swarm, y después indique rutas absolutas contenidas en lugar de opciones SMB:
+
+```sh
+automation/agent-swarm/bin/swarm-setup add-host \
+  --name isolated-node --address isolated-node.local --user your-user \
+  --local-catalog-root /srv/catalog \
+  --local-repo /srv/catalog/agent-swarm
+```
+
+`--local-catalog-root` y `--local-repo` son obligatorios juntos, sólo aplican a un spoke y el repo debe estar dentro de la raíz del catálogo. No se pueden combinar con `--share-host`. Consulte `swarm-setup add-host --help` para estas y las demás opciones.
 
 Quita `--no-auto-update` para activar la actualización diaria (04:30 por defecto) en ambas plataformas. Un nodo configurado antes de esa fase no tiene actualizador: ejecuta `automation/agent-swarm/bin/swarm-update install` en él. Herdr se actualiza pero su servidor nunca se reinicia; la ejecución sólo informa `server restart pending` en la salida de `swarm-update` y en su log, así que reinícialo tú cuando convenga. Si el comando se detiene esperando una acción, hazla y **vuelve a ejecutar el mismo comando**: continúa desde la fase pendiente. Cuando SSH/Tailscale necesite tolerancia a fallos, `--address` puede ir seguido de candidatos `--fallback-address` repetibles y ordenados (normalmente MagicDNS primero y LAN después); SSH los prueba en ese orden.
 
@@ -154,7 +165,7 @@ automation/agent-swarm/bin/swarm-delegate preflight spoke-node
 # {"status": "ready", "target": "spoke-node"}
 ```
 
-Si un spoke responde `catalog_missing`, monta el catálogo antes de enviarle trabajo. La [guía de validación](docs/es/runbooks/agent-swarm/validation.md) reúne todas las comprobaciones.
+Si un spoke en modo compartido responde `catalog_missing`, monte el catálogo antes de enviarle trabajo. Para un spoke sólo local, aprovisione el catálogo y checkout locales configurados; SMB no lo resuelve. Añada `--project <proyecto-relativo-al-catálogo>` para comprobar que el destino tiene el proyecto: `project_unavailable` significa que no lo tiene. La [guía de validación](docs/es/runbooks/agent-swarm/validation.md) reúne todas las comprobaciones.
 
 ## 📦 Envía tu primera tarea
 
@@ -228,7 +239,7 @@ Si recibes `unknown`, vuelve a consultar con `recover` y el mismo UUID. Si no ca
 ## 🔐 Seguridad
 
 - **SSH:** un alias `swarm-<nodo>` y una clave dedicada por sentido, con `StrictHostKeyChecking` activo y sin reenvío de agente ni de puertos.
-- **SMB:** sólo se comparte el catálogo aprobado. macOS usa el Keychain del nodo que lo monta; Linux/WSL usa acceso fstab preparado por la persona y un archivo de credenciales protegido, nunca contraseñas entregadas a la herramienta.
+- **Modo de catálogo:** el modo compartido expone sólo el catálogo SMB aprobado (macOS usa Keychain; Linux/WSL usa fstab preparado por la persona y un archivo de credenciales protegido). Un spoke sólo local evita esa exposición SMB, pero su catálogo y checkout se deben aprovisionar y mantener por separado; no puede afirmar que existe un proyecto ausente localmente.
 - **Agentes:** las sesiones y credenciales de Pi y Herdr nunca salen del nodo que los ejecuta.
 - **Limpieza:** cada nodo sólo cierra las pestañas y sesiones que él mismo creó.
 - **Escritura concurrente:** no se coordina de forma automática. Si dos tareas tocan el mismo proyecto, la revisión es humana.

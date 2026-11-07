@@ -1,6 +1,6 @@
 # SMB mounting between machines
 
-`swarm-smb-mount` queries, mounts, and unmounts **one specific SMB share** on macOS and Linux/WSL. macOS uses Keychain; Linux uses CIFS with a user-mountable fstab entry. The tool does not accept, store, or display passwords, and never uses sudo. During onboarding, `swarm-setup` takes `share.host`, `share.name`, and `share.user` from `config/hosts.json`; do not copy values from another machine.
+`swarm-smb-mount` queries, mounts, and unmounts **one specific SMB share** on macOS and Linux/WSL. It is only for the default shared-catalog mode; a local-only spoke must not install, copy, or mount it. macOS uses Keychain; Linux uses CIFS with a user-mountable fstab entry. The tool does not accept, store, or display passwords, and never uses sudo. During onboarding, `swarm-setup` takes `share.host`, `share.name`, and `share.user` from `config/hosts.json`; do not copy values from another machine.
 
 ## Initial preparation (macOS)
 
@@ -45,7 +45,7 @@ Output is JSON. `mount` is idempotent: it reports the already-mounted point. mac
 
 ## Persistent mount
 
-`swarm-setup` installs persistent mounting when onboarding a `spoke`. To install it manually, add `--persistent` to the first mount:
+`swarm-setup` installs persistent mounting only when onboarding a shared-mode `spoke`. Local-only setup skips the mount phase entirely. To install it manually, add `--persistent` to the first mount:
 
 ```bash
 automation/agent-swarm/bin/swarm-smb-mount mount \

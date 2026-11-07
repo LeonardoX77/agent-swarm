@@ -139,6 +139,58 @@ class SetupTests(unittest.TestCase):
             for option in ("--ssh-port PORT", "--origin-ssh-port PORT"):
                 self.assertIn(option, result.stdout)
 
+    def test_local_catalog_cli_requires_safe_paired_absolute_paths_without_writing_state(self):
+        script = Path(__file__).parents[1] / "bin/swarm-setup"
+        common = ["add-host", "--name", "new", "--address", "New.local", "--user", "leo"]
+        cases = (
+            ["--local-catalog-root", "/srv/catalog"],
+            ["--local-repo", "/srv/catalog/repo"],
+            ["--local-catalog-root", "relative", "--local-repo", "/srv/catalog/repo"],
+            ["--local-catalog-root", "/srv/catalog", "--local-repo", "/elsewhere/repo"],
+            ["--local-catalog-root", "/srv/catalog", "--local-repo", "/srv/catalog/../other"],
+            ["--role", "hub", "--local-catalog-root", "/srv/catalog", "--local-repo", "/srv/catalog/repo"],
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as home:
+                result = subprocess.run([sys.executable, str(script), *common, *arguments],
+                                        env=dict(os.environ, HOME=home), capture_output=True, text=True)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (2, "", "INVALID_INPUT\n"))
+                self.assertEqual(list(Path(home).iterdir()), [])
+        result = subprocess.run([sys.executable, str(script), "add-host", "--help"], capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertIn("--local-catalog-root ROOT", result.stdout)
+        self.assertIn("--local-repo REPO", result.stdout)
+
+    def test_local_catalog_skips_mount_and_requires_existing_remote_checkout_before_registry(self):
+        setup = self.make(local_catalog_root="/srv/catalog", local_repo="/srv/catalog/repo")
+        setup.origin = setup.registry.get("origin")
+        self.assertEqual(setup.mount(), ("skipped", "skipped for local catalog"))
+        self.assertFalse(any("swarm-smb-mount" in " ".join(call[0]) for call in setup.runner.calls))
+        setup.remote_python = lambda program, args=(): Result(1)
+        with self.assertRaisesRegex(SetupError, "Local catalog is not ready"):
+            setup.registry_phase()
+        self.assertNotIn("new-mac", setup.registry.hosts)
+
+    def test_local_catalog_symlink_escape_is_rejected_before_registry_mutation(self):
+        setup = self.make(local_catalog_root="/srv/catalog", local_repo="/srv/catalog/repo")
+        setup.origin = setup.registry.get("origin")
+        checks = []
+        setup.remote_python = lambda program, args=(): checks.append((program, args)) or Result(1)
+        with self.assertRaisesRegex(SetupError, "Local catalog is not ready"):
+            setup.registry_phase()
+        self.assertIn("resolve(strict=True)", checks[0][0])
+        self.assertEqual(checks[0][1], ("/srv/catalog", "/srv/catalog/repo"))
+        self.assertNotIn("new-mac", setup.registry.hosts)
+
+    def test_local_catalog_registry_entry_records_explicit_capability_and_paths(self):
+        setup = self.make(local_catalog_root="/srv/catalog", local_repo="/srv/catalog/repo")
+        setup.origin = setup.registry.get("origin")
+        setup.remote_path, setup.remote_home, setup.remote_system = "/usr/bin:/bin", "/Users/remote", "Linux"
+        setup.remote_tool = lambda command: Result(out="Remote\n" if command == "hostname -s" else "/usr/bin/tool\n")
+        entry = setup.build_registry_entry()
+        self.assertEqual((entry["catalog_mode"], entry["catalog_root"], entry["repo"]),
+                         ("local", "/srv/catalog", "/srv/catalog/repo"))
+
     def test_candidate_cli_rejects_invalid_values_without_writing_state(self):
         script = Path(__file__).parents[1] / "bin/swarm-setup"
         common = ["add-host", "--name", "new", "--address", "New.local", "--user", "leo"]
@@ -782,6 +834,24 @@ class SetupTests(unittest.TestCase):
         self.assertEqual([value["origin_host"] for value in envelopes], ["origin", "new-mac"])
         self.assertEqual([value["project"] for value in envelopes], ["org/repo", "org/repo"])
         self.assertTrue(all(value["acceptance"] == "Return the exact nonce." and value["mode"] == "executor" for value in envelopes))
+
+    def test_acceptance_for_different_local_project_runs_each_target_project(self):
+        setup = self.make(local_catalog_root="/srv/catalog", local_repo="/srv/catalog/remote-repo")
+        setup.origin = setup.registry.get("origin")
+        setup.registry._hosts["new-mac"] = dict(setup.origin, name="new-mac", catalog_mode="local",
+                                                 catalog_root="/srv/catalog", repo="/srv/catalog/remote-repo")
+        calls, envelopes, nonces = [], [], []
+        def command(argv, timeout=45, input=None):
+            calls.append((argv, input))
+            if input:
+                envelope = json.loads(input); envelopes.append(envelope); nonces.append(envelope["goal"].split()[3])
+            if "recover" in " ".join(argv): return Result(out=nonces[-1])
+            return Result()
+        setup.command = command
+        setup.remote = lambda command, timeout=60, input=None: Result()
+        self.assertEqual(setup.acceptance(), ("ok", "bidirectional acceptance passed"))
+        self.assertEqual([envelope["project"] for envelope in envelopes], ["remote-repo", "org/repo"])
+        self.assertTrue(any("--project remote-repo" in " ".join(argv) for argv, _ in calls))
 
     def test_acceptance_login_hint_exits_without_polling_submit(self):
         setup = self.make(); setup.origin = setup.registry.get("origin")

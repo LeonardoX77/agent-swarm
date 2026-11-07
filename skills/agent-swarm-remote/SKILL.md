@@ -15,7 +15,7 @@ Activate only for an explicit Agent Swarm task envelope with non-empty `task_id`
 
 - Find `<repo>` in the Agent Swarm bootstrap in startup instructions: `Agent Swarm repository on this host: <REPO_PATH>`. If it is missing, stop and ask; do not guess paths.
 - The registry is `<repo>/config/hosts.json`. Run `<repo>/automation/agent-swarm/bin/swarm-delegate self` to identify this host, then use its registry entry for `catalog_root`. An unknown host stops and is reported.
-- Resolve `project` only below this host's registry `catalog_root`; never use a mount other than the registry catalog root.
+- Resolve `project` only below this host's registry `catalog_root`; never use a mount other than the registry catalog root. `catalog_mode` defaults to `smb`; a `local` spoke uses only its pre-provisioned local catalog and must not install, copy, or mount SMB.
 - Read before writing, stay within the resolved project, goal, and acceptance, and do not disclose secrets. Respect permission prompts; pending approval is `blocked`, never success.
 - A target requires Pi and gentle-pi. Claude is optional.
 - Create one fresh UUID `task_id` once per work item. After ambiguity, retain the identical envelope and never mint a replacement ID.
@@ -30,14 +30,14 @@ Activate only for an explicit Agent Swarm task envelope with non-empty `task_id`
 ## Delegating Side
 
 1. Run `<repo>/automation/agent-swarm/bin/swarm-delegate list`; choose the target the user means by name or role. Ask if that remains ambiguous.
-2. Run `<repo>/automation/agent-swarm/bin/swarm-delegate preflight <target>`.
-3. If preflight returns `catalog_missing` for a spoke, report it or mount once on that target, using registry `share.host`, `share.name`, and `share.user`:
+2. Run `<repo>/automation/agent-swarm/bin/swarm-delegate preflight <target> --project <catalog-relative-project>`.
+3. If preflight returns `project_unavailable`, stop and report that the target lacks the requested project. If it returns `catalog_missing` for a shared-mode spoke, report it or mount once on that target, using registry `share.host`, `share.name`, and `share.user`:
 
    ```bash
    ssh <alias> '/usr/bin/python3 ~/.local/agent-swarm/bin/swarm-smb-mount mount --host <share.host> --share <share.name> --user <share.user>'
    ```
 
-   Re-run preflight. Stop and report if it is not ready.
+   Re-run preflight with the same `--project`. Stop and report if it is not ready. For a local-mode spoke, never mount SMB: report `catalog_missing` as a requirement to provision its configured local catalog and checkout.
 4. Write `envelope.json` with exactly `task_id`, `origin_host`, `project`, `goal`, `acceptance`, and `mode`. Set `mode` to `executor`; make `origin_host` this host's registry name; make `project` catalog-relative; make `goal` self-contained.
 5. Submit, then recover and close:
 
